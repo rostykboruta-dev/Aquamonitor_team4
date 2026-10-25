@@ -43,6 +43,7 @@
 
 * `moving_average(values: list[float], window: int) -> list[float]` — calculates moving average.
 * `moving_median(values: list[float], window: int) -> list[float]` — calculates moving median.
+* `moving_std(values: list[float], window: int) -> list[float]` — calculates moving sample standard deviation (N - 1); a window of one element gives 0.0.
 * `linear_interpolate(series: Series) -> list[float]` — restores missing values (`None`) in a `Series`.
 * `calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]` — returns a dictionary of evaluation metrics with keys `{"RMSE": float, "MAE": float}`.
 
