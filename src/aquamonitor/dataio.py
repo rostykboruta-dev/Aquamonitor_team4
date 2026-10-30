@@ -8,9 +8,78 @@ from aquamonitor.domain import HydroError, Observation
 
 USGS_URL = "https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items"
 
+MAX_PAGES = 100
+
 
 class ParseError(HydroError):
     """Data could not be read or parsed."""
+
+
+def _read_url(url: str, timeout: float) -> str:
+    """Downloads one URL and returns the response text.
+
+    Raises:
+        ParseError: If the network or the server fails.
+    """
+    request = urllib.request.Request(url, headers={"Accept": "application/geo+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
+        raise ParseError(f"cannot read {url}: {exc}") from exc
+
+
+def _next_url(document: object, base_url: str) -> str | None:
+    """Returns the absolute URL of the page with rel="next", or None."""
+    links = document.get("links") if isinstance(document, dict) else None
+    if not isinstance(links, list):
+        return None
+    for link in links:
+        if isinstance(link, dict) and link.get("rel") == "next" and link.get("href"):
+            return urllib.parse.urljoin(base_url, link["href"])
+    return None
+
+
+def fetch_usgs_json(site: str, parameter: str = "00065", period: str = "P7D",
+                    timeout: float = 30.0) -> str:
+    """Downloads measurements from the USGS Water Data API and returns the JSON text.
+
+    Follows the `rel="next"` links, so a long period is read completely.
+    One page is returned as is; several pages are merged into one FeatureCollection.
+    At most MAX_PAGES pages are read.
+
+    Raises:
+        ValueError: If site is empty.
+        ParseError: If the network or the server fails, a page is not valid JSON,
+            the pages loop or there are more than MAX_PAGES of them.
+    """
+    url = build_usgs_url(site, parameter, period)
+    first_text = text = _read_url(url, timeout)
+    seen, features = {url}, []
+    for page in range(1, MAX_PAGES + 1):
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ParseError(f"page {page} is not valid JSON: {exc}") from exc
+        page_features = document.get("features") if isinstance(document, dict) else None
+        if not isinstance(page_features, list):
+            raise ParseError(f"page {page} has no 'features' list.")
+        features.extend(page_features)
+
+        next_url = _next_url(document, url)
+        if next_url is None:
+            break
+        if next_url in seen:
+            raise ParseError(f"paging loop detected at {next_url}")
+        seen.add(next_url)
+        url, text = next_url, _read_url(next_url, timeout)
+    else:
+        raise ParseError(f"more than {MAX_PAGES} pages, stopped.")
+
+    if page == 1:
+        return first_text
+    return json.dumps({"type": "FeatureCollection", "features": features,
+                       "numberReturned": len(features)})
 
 
 def build_usgs_url(site: str, parameter: str = "00065", period: str = "P7D") -> str:
@@ -32,26 +101,6 @@ def build_usgs_url(site: str, parameter: str = "00065", period: str = "P7D") -> 
     query = {"f": "json", "monitoring_location_id": site, "parameter_code": parameter,
              "time": period, "limit": 10_000, "skipGeometry": "true"}
     return f"{USGS_URL}?{urllib.parse.urlencode(query)}"
-
-
-def fetch_usgs_json(site: str, parameter: str = "00065", period: str = "P7D",
-                    timeout: float = 30.0) -> str:
-    """Downloads measurements from the USGS Water Data API and returns the JSON text.
-
-    Only the first page is read (up to 10000 records; a week of 15-minute
-    data is about 700).
-
-    Raises:
-        ValueError: If site is empty.
-        ParseError: If the network or the server fails.
-    """
-    url = build_usgs_url(site, parameter, period)
-    request = urllib.request.Request(url, headers={"Accept": "application/geo+json"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
-        raise ParseError(f"cannot read {url}: {exc}") from exc
 
 
 def parse_usgs_json(json_str: str) -> list[Observation]:
