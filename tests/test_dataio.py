@@ -88,6 +88,13 @@ class TestParseUsgsJson(unittest.TestCase):
     def test_parse_error_belongs_to_project_hierarchy(self) -> None:
         self.assertTrue(issubclass(ParseError, HydroError))
 
+    def test_bool_and_nan_values_raise_parse_error(self) -> None:
+        """True, NaN and infinity are not valid measurements."""
+        for bad in (True, "NaN", "inf", float("nan")):
+            with self.subTest(repr(bad)), self.assertRaises(ParseError):
+                parse_usgs_json(json.dumps(
+                    {"features": [feature("2026-10-18T12:00:00+00:00", bad)]}))
+
 
 class TestUsgsRequest(unittest.TestCase):
 

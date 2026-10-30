@@ -1,4 +1,5 @@
 import json
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -134,7 +135,14 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
             sensor_id = f"{props['monitoring_location_id']}-{props['parameter_code']}"
             timestamp = datetime.fromisoformat(props["time"])
             raw_value = props.get("value")
-            value = None if raw_value is None else float(raw_value)
+            if raw_value is None:
+                value = None
+            elif isinstance(raw_value, bool):
+                raise ValueError("boolean is not a measurement")
+            else:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise ValueError(f"value is not finite: {raw_value!r}")
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
             observations.append(Observation(timestamp.astimezone(timezone.utc), sensor_id, value))
