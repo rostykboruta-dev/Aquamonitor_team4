@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,6 +11,14 @@ from aquamonitor.domain import HydroError, Observation
 USGS_URL = "https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items"
 
 MAX_PAGES = 100
+
+_LOG_RE = re.compile(
+    r"^\s*(?P<time>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)"
+    r"\s*\|\s*(?P<site>[A-Za-z0-9-]+)"
+    r"\s*\|\s*(?P<value>-?\d+(?:\.\d+)?|--)"
+    r"\s*\|\s*(?P<flag>[APE])\s*$"
+)
+_FLAGS = {"A": "Approved", "P": "Provisional", "E": "Estimated"}
 
 
 class ParseError(HydroError):
@@ -149,3 +158,30 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
         except (KeyError, TypeError, ValueError) as exc:
             raise ParseError(f"malformed record #{index}: {exc!r}") from exc
     return sorted(observations, key=lambda obs: (obs.sensor_id, obs.timestamp))
+
+
+def parse_log_line(line: str) -> Observation:
+    """Parses one line of a station log into an observation.
+
+    Format: ``<time> | <site> | <value or --> | <flag>``, e.g.
+    ``2026-10-18 12:00:00 | 01646500 | 3.72 | A``. Time without an offset is UTC;
+    ``--`` means a missing value; flag is A, P or E. The site code is the sensor_id.
+
+    Raises:
+        ParseError: If the line does not match the format or the time is invalid.
+            The message contains the line.
+    """
+    if not isinstance(line, str):
+        raise ParseError(f"log line must be a string, got {type(line).__name__}.")
+    match = _LOG_RE.match(line)
+    if match is None:
+        raise ParseError(f"line does not match the log format: {line!r}")
+    try:
+        timestamp = datetime.fromisoformat(match["time"].replace(" ", "T"))
+    except ValueError as exc:
+        raise ParseError(f"bad timestamp in line {line!r}: {exc}") from exc
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    raw = match["value"]
+    value = None if raw == "--" else float(raw)
+    return Observation(timestamp.astimezone(timezone.utc), match["site"], value)

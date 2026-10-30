@@ -10,6 +10,7 @@ from aquamonitor.dataio import (
     build_usgs_url,
     fetch_usgs_json,
     parse_usgs_json,
+    parse_log_line,
 )
 from aquamonitor.domain import HydroError, Series
 
@@ -172,6 +173,36 @@ class TestUsgsPaging(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=[fake_response(page1), bad]):
             with self.assertRaises(ParseError):
                 fetch_usgs_json("01646500")
+
+
+class TestParseLogLine(unittest.TestCase):
+
+    def test_normal_line(self) -> None:
+        obs = parse_log_line("2026-10-18 12:00:00 | 01646500 | 3.72 | A")
+
+        self.assertEqual(obs.sensor_id, "01646500")
+        self.assertEqual(obs.value, 3.72)
+        self.assertEqual(obs.timestamp, datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc))
+
+    def test_missing_value_and_offset(self) -> None:
+        obs = parse_log_line("2026-10-18T12:00+03:00 | 01646500 | -- | P")
+
+        self.assertTrue(obs.is_missing())
+        self.assertEqual(obs.timestamp, datetime(2026, 10, 18, 9, 0, tzinfo=timezone.utc))
+
+    def test_bad_lines_raise_parse_error_with_context(self) -> None:
+        bad_lines = ["", "garbage", "2026-10-18 12:00:00 | 01646500 | 3.7 | X",
+                     "2026-10-18 12:00:00 | 01646500 | abc | A",
+                     "2026-13-01 12:00:00 | 01646500 | 3.7 | A",
+                     "2026-10-18 12:00:00 | 01646500 | 3.7"]
+        for line in bad_lines:
+            with self.subTest(line), self.assertRaises(ParseError) as ctx:
+                parse_log_line(line)
+            self.assertIn(line, str(ctx.exception))
+
+    def test_non_string_raises_parse_error(self) -> None:
+        with self.assertRaises(ParseError):
+            parse_log_line(None)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":
