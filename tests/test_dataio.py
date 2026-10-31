@@ -11,8 +11,9 @@ from aquamonitor.dataio import (
     fetch_usgs_json,
     parse_usgs_json,
     parse_log_line,
+    clean_observations,
 )
-from aquamonitor.domain import HydroError, Series
+from aquamonitor.domain import HydroError, Series, Observation
 
 SAMPLE = Path(__file__).parent / "data" / "usgs_sample.json"
 NEXT = "https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?cursor=abc"
@@ -203,6 +204,35 @@ class TestParseLogLine(unittest.TestCase):
     def test_non_string_raises_parse_error(self) -> None:
         with self.assertRaises(ParseError):
             parse_log_line(None)  # type: ignore[arg-type]
+
+
+class TestCleanObservations(unittest.TestCase):
+
+    def test_outlier_duplicate_and_offset(self) -> None:
+        utc = timezone.utc
+        plus3 = timezone(timedelta(hours=3))
+        data = [
+            Observation(datetime(2026, 10, 18, 12, 0, tzinfo=utc), "S1", 3.0),
+            Observation(datetime(2026, 10, 18, 12, 0, tzinfo=utc), "S1", 3.1),  # duplicate
+            Observation(datetime(2026, 10, 18, 12, 5, tzinfo=utc), "S1", 999.0),  # outlier
+            Observation(datetime(2026, 10, 18, 15, 10, tzinfo=plus3), "S1", None),
+        ]
+        cleaned, rejected = clean_observations(data)
+
+        self.assertEqual([o.value for o in cleaned], [3.0, None])
+        self.assertEqual(cleaned[1].timestamp, datetime(2026, 10, 18, 12, 10, tzinfo=utc))
+        self.assertEqual(len(rejected), 2)
+        self.assertIn("duplicate", rejected[0])
+        self.assertIn("999.0", rejected[1])
+
+    def test_empty_input(self) -> None:
+        self.assertEqual(clean_observations([]), ([], []))
+
+    def test_boundaries_are_inclusive(self) -> None:
+        now = datetime(2026, 10, 18, tzinfo=timezone.utc)
+        data = [Observation(now, "S1", -10.0),
+                Observation(now + timedelta(minutes=5), "S1", 100.0)]
+        self.assertEqual(len(clean_observations(data)[0]), 2)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 import json
 import math
 import re
+import copy
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from aquamonitor.domain import HydroError, Observation
 
@@ -185,3 +186,41 @@ def parse_log_line(line: str) -> Observation:
     raw = match["value"]
     value = None if raw == "--" else float(raw)
     return Observation(timestamp.astimezone(timezone.utc), match["site"], value)
+
+
+def clean_observations(
+        observations: list[Observation],
+        min_value: float = -10.0,
+        max_value: float = 100.0,
+) -> tuple[list[Observation], list[str]]:
+    """Cleans observations: UTC time, duplicates and out-of-range values.
+
+    Missing values (None) are gaps, not outliers, so they are kept.
+    The result is sorted by (sensor_id, time).
+
+    Args:
+        observations: Observations of any sensors and time offsets.
+        min_value: Lowest allowed value (inclusive).
+        max_value: Highest allowed value (inclusive).
+
+    Returns:
+        A tuple (cleaned observations, log of rejected records, one string each).
+    """
+    kept: list[Observation] = []
+    rejected: list[str] = []
+    seen: set[tuple[str, datetime]] = set()
+    for obs in sorted(observations, key=lambda o: (o.sensor_id, o.timestamp)):
+        stamp = obs.timestamp.astimezone(timezone.utc)
+        label = f"{obs.sensor_id} {stamp.isoformat()}"
+        if (obs.sensor_id, stamp) in seen:
+            rejected.append(f"{label}: duplicate timestamp")
+            continue
+        seen.add((obs.sensor_id, stamp))
+        if obs.value is not None and not min_value <= obs.value <= max_value:
+            rejected.append(f"{label}: value {obs.value} outside [{min_value}, {max_value}]")
+            continue
+        if obs.timestamp.utcoffset() != timedelta(0):
+            obs = copy.copy(obs)
+            obs.timestamp = stamp
+        kept.append(obs)
+    return kept, rejected
