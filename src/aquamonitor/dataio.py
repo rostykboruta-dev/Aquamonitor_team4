@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
-from aquamonitor.domain import HydroError, Observation
+from aquamonitor.domain import HydroError, Observation, SensorError, convert_units
 
 USGS_URL = "https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items"
 
@@ -118,7 +118,10 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
     """Parses a USGS JSON response (GeoJSON `features`) into observations.
 
     Timestamps become UTC and a null value becomes a missing observation
-    (value None). The sensor_id is "<site>-<parameter>", e.g. "USGS-01646500-00065".
+    (value None). Gauge height in feet (`unit_of_measure` "ft") is converted
+    to meters; other units are kept as they are. The `approval_status` of the
+    record becomes `Observation.status`. The sensor_id is "<site>-<parameter>",
+    e.g. "USGS-01646500-00065".
 
     Returns:
         Observations sorted by sensor_id and time, so the slice of one sensor
@@ -153,10 +156,14 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
                 value = float(raw_value)
                 if not math.isfinite(value):
                     raise ValueError(f"value is not finite: {raw_value!r}")
+            if value is not None and props.get("unit_of_measure") == "ft":
+                value = convert_units(value, "ft", "m")
+            status = props.get("approval_status")
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
-            observations.append(Observation(timestamp.astimezone(timezone.utc), sensor_id, value))
-        except (KeyError, TypeError, ValueError) as exc:
+            observations.append(Observation(
+                timestamp.astimezone(timezone.utc), sensor_id, value, status))
+        except (KeyError, TypeError, ValueError, SensorError) as exc:
             raise ParseError(f"malformed record #{index}: {exc!r}") from exc
     return sorted(observations, key=lambda obs: (obs.sensor_id, obs.timestamp))
 

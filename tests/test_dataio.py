@@ -57,7 +57,8 @@ class TestParseUsgsJson(unittest.TestCase):
         ]})
         result = parse_usgs_json(text)
 
-        self.assertEqual([obs.value for obs in result], [None, 3.7])
+        self.assertIsNone(result[0].value)
+        self.assertAlmostEqual(result[1].value, 3.7 * 0.3048)
         self.assertTrue(result[0].is_missing())
         self.assertEqual(result[1].timestamp, datetime(2026, 10, 18, 12, 5, tzinfo=timezone.utc))
 
@@ -145,7 +146,10 @@ class TestUsgsPaging(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 2)
         self.assertEqual(urlopen.call_args_list[1].args[0].full_url, NEXT)
-        self.assertEqual([o.value for o in parse_usgs_json(text)], [1.0, 1.1, 1.2])
+        values = [o.value for o in parse_usgs_json(text)]
+        self.assertEqual(len(values), 3)
+        for got, feet in zip(values, [1.0, 1.1, 1.2]):
+            self.assertAlmostEqual(got, feet * 0.3048)
 
     def test_paging_loop_raises_parse_error(self) -> None:
         """A next link to an already seen page is not followed forever."""
@@ -233,6 +237,32 @@ class TestCleanObservations(unittest.TestCase):
         data = [Observation(now, "S1", -10.0),
                 Observation(now + timedelta(minutes=5), "S1", 100.0)]
         self.assertEqual(len(clean_observations(data)[0]), 2)
+
+
+class TestUsgsUnitsAndStatus(unittest.TestCase):
+
+    def test_feet_become_meters_and_other_units_stay(self) -> None:
+        result = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        self.assertAlmostEqual(result[0].value, 2.86 * 0.3048)
+
+        item = feature("2026-10-18T12:00:00+00:00", "5")
+        item["properties"]["unit_of_measure"] = "ft^3/s"
+        self.assertEqual(parse_usgs_json(json.dumps({"features": [item]}))[0].value, 5.0)
+
+    def test_status_is_kept(self) -> None:
+        result = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        self.assertEqual(result[0].status, "Provisional")
+
+    def test_missing_status_is_none(self) -> None:
+        result = parse_usgs_json(json.dumps({"features": [
+            feature("2026-10-18T12:00:00+00:00", "1")]}))
+        self.assertIsNone(result[0].status)
+
+    def test_bad_status_raises_parse_error(self) -> None:
+        item = feature("2026-10-18T12:00:00+00:00", "1")
+        item["properties"]["approval_status"] = 5
+        with self.assertRaises(ParseError):
+            parse_usgs_json(json.dumps({"features": [item]}))
 
 
 if __name__ == "__main__":
