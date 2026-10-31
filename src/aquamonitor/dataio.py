@@ -171,9 +171,12 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
 def parse_log_line(line: str) -> Observation:
     """Parses one line of a station log into an observation.
 
+    Value is in meters; the flag becomes the status (A=Approved, P=Provisional, E=Estimated).
+
     Format: ``<time> | <site> | <value or --> | <flag>``, e.g.
     ``2026-10-18 12:00:00 | 01646500 | 3.72 | A``. Time without an offset is UTC;
     ``--`` means a missing value; flag is A, P or E. The site code is the sensor_id.
+
 
     Raises:
         ParseError: If the line does not match the format or the time is invalid.
@@ -192,17 +195,18 @@ def parse_log_line(line: str) -> Observation:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
     raw = match["value"]
     value = None if raw == "--" else float(raw)
-    return Observation(timestamp.astimezone(timezone.utc), match["site"], value)
+    return Observation(timestamp.astimezone(timezone.utc), match["site"], value,
+                       _FLAGS[match["flag"]])
 
 
 def clean_observations(
         observations: list[Observation],
-        min_value: float = -10.0,
-        max_value: float = 100.0,
+        min_value: float = -3.0,
+        max_value: float = 30.0,
 ) -> tuple[list[Observation], list[str]]:
     """Cleans observations: UTC time, duplicates and out-of-range values.
 
-    Missing values (None) are gaps, not outliers, so they are kept.
+    Values are in meters. Missing values (None) are gaps, not outliers, so they are kept.
     The result is sorted by (sensor_id, time).
 
     Args:

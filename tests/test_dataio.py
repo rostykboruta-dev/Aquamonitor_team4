@@ -209,6 +209,10 @@ class TestParseLogLine(unittest.TestCase):
         with self.assertRaises(ParseError):
             parse_log_line(None)  # type: ignore[arg-type]
 
+    def test_flag_becomes_status(self) -> None:
+        obs = parse_log_line("2026-10-18 12:00:00 | 01646500 | 3.72 | P")
+        self.assertEqual(obs.status, "Provisional")
+
 
 class TestCleanObservations(unittest.TestCase):
 
@@ -234,8 +238,8 @@ class TestCleanObservations(unittest.TestCase):
 
     def test_boundaries_are_inclusive(self) -> None:
         now = datetime(2026, 10, 18, tzinfo=timezone.utc)
-        data = [Observation(now, "S1", -10.0),
-                Observation(now + timedelta(minutes=5), "S1", 100.0)]
+        data = [Observation(now, "S1", -3.0),
+                Observation(now + timedelta(minutes=5), "S1", 30.0)]
         self.assertEqual(len(clean_observations(data)[0]), 2)
 
 
