@@ -5,27 +5,51 @@
 ## 1. Data Model (`src/aquamonitor/domain.py`)
 
 ### Exceptions
-* `HydroError(Exception)` — base exception of the project.
-* `SensorError(HydroError)` — error related to sensor or invalid parameters.
-* `CalibrationError(SensorError)` — calibration error.
-* `MissingDataError(HydroError)` — missing data or chronology violation.
-* `ThresholdError(HydroError)` — value out of critical limits.
+* `HydroError(Exception)` — base exception of the project; also raised for invalid `Station` / `Basin` data.
+* `SensorError(HydroError)` — invalid sensor, observation, unit or value (including a value outside the allowed range).
+* `CalibrationError(SensorError)` — invalid calibration offset.
+* `MissingDataError(HydroError)` — chronology violation in a `Series` (an earlier or a duplicate timestamp).
+* `ThresholdError(HydroError)` — value out of critical limits (not raised yet, planned for the threshold model).
+
+### Units
+* Project units: water level in **meters** (`m`), precipitation in millimeters (`mm`), temperature in `degC`.
+* USGS reports gauge height in feet, so values from a source in other units are converted on input.
+* `UNIT_FACTORS: dict[tuple[str, str], float]` — `("ft", "m"): 0.3048`, `("in", "mm"): 25.4`.
+* `convert_units(value: float, from_unit: str, to_unit: str) -> float` — returns the value unchanged for the same unit;
+  a non-number or an unknown pair of units raises `SensorError`.
 
 ### Classes
 * **`Sensor(sensor_id: str, name: str, unit: str, calibration_offset: float = 0.0)`**
   * `apply_calibration(raw_value: float) -> float` — applies calibration offset.
-* **`LevelGauge(Sensor)`**: water level gauge (`max_depth: float = 15.0`).
+  * `validate_value(value: float) -> None` — accepts any number; subclasses override it to reject values.
+  * `measure(timestamp: datetime, raw_value: float | None, status: str | None = None, unit: str | None = None) -> Observation`
+    — converts `raw_value` from `unit` to the sensor unit, applies the calibration offset (given in the sensor unit),
+    validates the value and returns an observation of this sensor; `None` stays a missing value.
+* **`LevelGauge(Sensor)`**: water level gauge in meters (`unit="m"`).
+  * `max_depth: float = 15.0` — descriptive only, must be positive; not used for validation.
+  * `level_range: tuple[float, float] | None = None` — allowed (minimum, maximum) level taken from the configuration;
+    a level outside it raises `SensorError`; `None` disables the check.
 * **`RainGauge(Sensor)`**: precipitation sensor (`unit="mm"`).
 * **`TemperatureSensor(Sensor)`**: temperature sensor (`unit="degC"`).
-* **`Observation(timestamp: datetime, sensor_id: str, value: float | None)`**
-  * `timestamp` must contain time zone information (`tzinfo`).
+* **`Observation(timestamp: datetime, sensor_id: str, value: float | None, status: str | None = None)`**
+  * `timestamp` must contain time zone information (`tzinfo`); `value` is a number (not `bool`) or `None`.
+  * `status` — data status from the source (`"Provisional"`, `"Approved"`), a non-empty string or `None`.
   * `is_missing() -> bool` — returns `True` if `value is None`.
 * **`Series(sensor_id: str, observations: list[Observation] | None = None)`**
-  * `add_observation(obs: Observation)` — adds an observation with `sensor_id` and time order validation.
+  * `add_observation(obs: Observation)` — checks `sensor_id` and that time strictly increases
+    (`MissingDataError` for an earlier or a duplicate timestamp).
   * `values() -> list[float | None]` — returns all values.
   * `timestamps() -> list[datetime]` — returns all timestamps.
   * `get_valid_observations() -> list[Observation]` — returns observations without missing values.
   * `count_missing() -> int` — returns number of missing values.
+  * `len(series)` and `for obs in series` — number of observations and iteration in chronological order.
+* **`Station(code: str, name: str, latitude: float | None = None, longitude: float | None = None)`** — composition of sensors.
+  * `add_sensor(sensor: Sensor)`, `get_sensor(sensor_id: str) -> Sensor`, `sensors -> list[Sensor]`, `len(station)`.
+  * Empty code or name, latitude outside ±90 or longitude outside ±180 raise `HydroError`;
+    a duplicate or unknown sensor raises `SensorError`.
+* **`Basin(name: str)`** — collection of stations.
+  * `add_station(station: Station)`, `get_station(code: str) -> Station`, `stations -> list[Station]`, `len(basin)`.
+  * Empty name, duplicate or unknown station raise `HydroError`.
 
 ---
 
