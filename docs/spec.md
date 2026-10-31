@@ -47,6 +47,20 @@
 * `linear_interpolate(series: Series) -> list[float]` — restores missing values (`None`) in a `Series`.
 * `calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]` — returns a dictionary of evaluation metrics with keys `{"RMSE": float, "MAE": float}`.
 
+Added in week 2 (role C):
+* `linear_interpolate` fills `None` linearly in real time between the known neighbours; gaps at the start or the end
+  take the nearest known value; an empty series gives `[]`; a series with no known values raises `MissingDataError`;
+  a non-`Series` argument raises `TypeError`.
+* `nearest_interpolate(series: Series) -> list[float]` — fills `None` with the nearest known value in time
+  (the earlier one on a tie); same errors as `linear_interpolate`.
+* `interpolation_error(series: Series, method: str = "linear", every: int = 5) -> float` — hides every `every`-th
+  known point inside the series, interpolates (`"linear"` or `"nearest"`) and returns the mean absolute error
+  on the hidden points; bad `method`, `every < 2` or a too short series raise `ValueError`.
+* `naive_forecast(values: list[float], horizon: int) -> list[float]` — repeats the last value `horizon` times
+  (baseline for Demonstration 1); `horizon` is counted in steps of the series.
+* `hours_to_steps(timestamps: list[datetime], hours: float) -> int` — converts a horizon in hours to steps using
+  the median interval between timestamps (5-minute data: 12 hours = 144 steps).
+
 ---
 
 ## 4. Analytics (`src/aquamonitor/analytics.py`)
