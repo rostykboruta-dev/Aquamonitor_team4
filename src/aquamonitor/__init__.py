@@ -13,6 +13,9 @@ from .domain import (
     # Data and series
     Observation,
     Series,
+    # Stations
+    Station,
+    Basin,
 )
 
 __version__ = "0.1.0"
@@ -32,4 +35,7 @@ __all__ = [
     # Data and series
     "Observation",
     "Series",
+    # Stations
+    "Station",
+    "Basin",
 ]
