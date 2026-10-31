@@ -55,11 +55,14 @@
 
 ## 2. Data Module (`src/aquamonitor/dataio.py`)
 
-* **Exception**: `ParseError(HydroError)` — raised on reading or parsing error.
-* **Functions**:
-  * `parse_usgs_json(json_str: str) -> list[Observation]` — parses a JSON string into a list of `Observation` objects with UTC time zone.
-  * `parse_log_line(line: str) -> Observation` — parses a single log line using a regular expression.
-  * `clean_observations(observations: list[Observation]) -> tuple[list[Observation], list[str]]` — detects outliers and returns cleaned data alongside a list of rejected records.
+**Implemented**
+* `ParseError(HydroError)` — read or parse error (network failures too).
+* `build_usgs_url(site, parameter="00065", period="P7D") -> str` — request URL; site "01646500" becomes "USGS-01646500".
+* `fetch_usgs_json(site, parameter="00065", period="P7D", timeout=30.0) -> str` — follows `rel="next"` (up to `MAX_PAGES`), merges pages into one FeatureCollection.
+* `parse_usgs_json(json_str) -> list[Observation]` — UTC time, `null` -> `None`, sorted by `(sensor_id, time)`. `sensor_id` = `<site>-<parameter>`, e.g. `USGS-01646500-00065`. Values in feet (`unit_of_measure == "ft"`) are converted to meters with `convert_units`; other units stay as they are. `approval_status` goes to `Observation.status`. Returns all sensors together; filter one `sensor_id` before creating a `Series`.
+* `parse_log_line(line) -> Observation` — format: `<time> | <site> | <value or --> | <flag A/P/E>`, e.g. `2026-10-18 12:00:00 | 01646500 | 3.72 | A`. No offset = UTC, `--` = missing, value in meters, `sensor_id` = site code, flag becomes status (A=Approved, P=Provisional, E=Estimated). Errors: `ParseError` with the line text.
+* `clean_observations(observations, min_value=-3.0, max_value=30.0) -> tuple[list[Observation], list[str]]` — values in meters; UTC, drops duplicate timestamps and out-of-range values; `None` is kept. Returns (cleaned, log of rejected). `Series` rejects duplicate timestamps, so call this before creating a `Series`.
+
 
 ---
 

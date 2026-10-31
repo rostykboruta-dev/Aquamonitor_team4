@@ -1,16 +1,96 @@
 import json
+import math
+import re
+import copy
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from aquamonitor.domain import HydroError, Observation
+from aquamonitor.domain import HydroError, Observation, SensorError, convert_units
 
 USGS_URL = "https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items"
+
+MAX_PAGES = 100
+
+_LOG_RE = re.compile(
+    r"^\s*(?P<time>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)"
+    r"\s*\|\s*(?P<site>[A-Za-z0-9-]+)"
+    r"\s*\|\s*(?P<value>-?\d+(?:\.\d+)?|--)"
+    r"\s*\|\s*(?P<flag>[APE])\s*$"
+)
+_FLAGS = {"A": "Approved", "P": "Provisional", "E": "Estimated"}
 
 
 class ParseError(HydroError):
     """Data could not be read or parsed."""
+
+
+def _read_url(url: str, timeout: float) -> str:
+    """Downloads one URL and returns the response text.
+
+    Raises:
+        ParseError: If the network or the server fails.
+    """
+    request = urllib.request.Request(url, headers={"Accept": "application/geo+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
+        raise ParseError(f"cannot read {url}: {exc}") from exc
+
+
+def _next_url(document: object, base_url: str) -> str | None:
+    """Returns the absolute URL of the page with rel="next", or None."""
+    links = document.get("links") if isinstance(document, dict) else None
+    if not isinstance(links, list):
+        return None
+    for link in links:
+        if isinstance(link, dict) and link.get("rel") == "next" and link.get("href"):
+            return urllib.parse.urljoin(base_url, link["href"])
+    return None
+
+
+def fetch_usgs_json(site: str, parameter: str = "00065", period: str = "P7D",
+                    timeout: float = 30.0) -> str:
+    """Downloads measurements from the USGS Water Data API and returns the JSON text.
+
+    Follows the `rel="next"` links, so a long period is read completely.
+    One page is returned as is; several pages are merged into one FeatureCollection.
+    At most MAX_PAGES pages are read.
+
+    Raises:
+        ValueError: If site is empty.
+        ParseError: If the network or the server fails, a page is not valid JSON,
+            the pages loop or there are more than MAX_PAGES of them.
+    """
+    url = build_usgs_url(site, parameter, period)
+    first_text = text = _read_url(url, timeout)
+    seen, features = {url}, []
+    for page in range(1, MAX_PAGES + 1):
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ParseError(f"page {page} is not valid JSON: {exc}") from exc
+        page_features = document.get("features") if isinstance(document, dict) else None
+        if not isinstance(page_features, list):
+            raise ParseError(f"page {page} has no 'features' list.")
+        features.extend(page_features)
+
+        next_url = _next_url(document, url)
+        if next_url is None:
+            break
+        if next_url in seen:
+            raise ParseError(f"paging loop detected at {next_url}")
+        seen.add(next_url)
+        url, text = next_url, _read_url(next_url, timeout)
+    else:
+        raise ParseError(f"more than {MAX_PAGES} pages, stopped.")
+
+    if page == 1:
+        return first_text
+    return json.dumps({"type": "FeatureCollection", "features": features,
+                       "numberReturned": len(features)})
 
 
 def build_usgs_url(site: str, parameter: str = "00065", period: str = "P7D") -> str:
@@ -34,31 +114,14 @@ def build_usgs_url(site: str, parameter: str = "00065", period: str = "P7D") -> 
     return f"{USGS_URL}?{urllib.parse.urlencode(query)}"
 
 
-def fetch_usgs_json(site: str, parameter: str = "00065", period: str = "P7D",
-                    timeout: float = 30.0) -> str:
-    """Downloads measurements from the USGS Water Data API and returns the JSON text.
-
-    Only the first page is read (up to 10000 records; a week of 15-minute
-    data is about 700).
-
-    Raises:
-        ValueError: If site is empty.
-        ParseError: If the network or the server fails.
-    """
-    url = build_usgs_url(site, parameter, period)
-    request = urllib.request.Request(url, headers={"Accept": "application/geo+json"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
-        raise ParseError(f"cannot read {url}: {exc}") from exc
-
-
 def parse_usgs_json(json_str: str) -> list[Observation]:
     """Parses a USGS JSON response (GeoJSON `features`) into observations.
 
     Timestamps become UTC and a null value becomes a missing observation
-    (value None). The sensor_id is "<site>-<parameter>", e.g. "USGS-01646500-00065".
+    (value None). Gauge height in feet (`unit_of_measure` "ft") is converted
+    to meters; other units are kept as they are. The `approval_status` of the
+    record becomes `Observation.status`. The sensor_id is "<site>-<parameter>",
+    e.g. "USGS-01646500-00065".
 
     Returns:
         Observations sorted by sensor_id and time, so the slice of one sensor
@@ -85,10 +148,90 @@ def parse_usgs_json(json_str: str) -> list[Observation]:
             sensor_id = f"{props['monitoring_location_id']}-{props['parameter_code']}"
             timestamp = datetime.fromisoformat(props["time"])
             raw_value = props.get("value")
-            value = None if raw_value is None else float(raw_value)
+            if raw_value is None:
+                value = None
+            elif isinstance(raw_value, bool):
+                raise ValueError("boolean is not a measurement")
+            else:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise ValueError(f"value is not finite: {raw_value!r}")
+            if value is not None and props.get("unit_of_measure") == "ft":
+                value = convert_units(value, "ft", "m")
+            status = props.get("approval_status")
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
-            observations.append(Observation(timestamp.astimezone(timezone.utc), sensor_id, value))
-        except (KeyError, TypeError, ValueError) as exc:
+            observations.append(Observation(
+                timestamp.astimezone(timezone.utc), sensor_id, value, status))
+        except (KeyError, TypeError, ValueError, SensorError) as exc:
             raise ParseError(f"malformed record #{index}: {exc!r}") from exc
     return sorted(observations, key=lambda obs: (obs.sensor_id, obs.timestamp))
+
+
+def parse_log_line(line: str) -> Observation:
+    """Parses one line of a station log into an observation.
+
+    Value is in meters; the flag becomes the status (A=Approved, P=Provisional, E=Estimated).
+
+    Format: ``<time> | <site> | <value or --> | <flag>``, e.g.
+    ``2026-10-18 12:00:00 | 01646500 | 3.72 | A``. Time without an offset is UTC;
+    ``--`` means a missing value; flag is A, P or E. The site code is the sensor_id.
+
+
+    Raises:
+        ParseError: If the line does not match the format or the time is invalid.
+            The message contains the line.
+    """
+    if not isinstance(line, str):
+        raise ParseError(f"log line must be a string, got {type(line).__name__}.")
+    match = _LOG_RE.match(line)
+    if match is None:
+        raise ParseError(f"line does not match the log format: {line!r}")
+    try:
+        timestamp = datetime.fromisoformat(match["time"].replace(" ", "T"))
+    except ValueError as exc:
+        raise ParseError(f"bad timestamp in line {line!r}: {exc}") from exc
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    raw = match["value"]
+    value = None if raw == "--" else float(raw)
+    return Observation(timestamp.astimezone(timezone.utc), match["site"], value,
+                       _FLAGS[match["flag"]])
+
+
+def clean_observations(
+        observations: list[Observation],
+        min_value: float = -3.0,
+        max_value: float = 30.0,
+) -> tuple[list[Observation], list[str]]:
+    """Cleans observations: UTC time, duplicates and out-of-range values.
+
+    Values are in meters. Missing values (None) are gaps, not outliers, so they are kept.
+    The result is sorted by (sensor_id, time).
+
+    Args:
+        observations: Observations of any sensors and time offsets.
+        min_value: Lowest allowed value (inclusive).
+        max_value: Highest allowed value (inclusive).
+
+    Returns:
+        A tuple (cleaned observations, log of rejected records, one string each).
+    """
+    kept: list[Observation] = []
+    rejected: list[str] = []
+    seen: set[tuple[str, datetime]] = set()
+    for obs in sorted(observations, key=lambda o: (o.sensor_id, o.timestamp)):
+        stamp = obs.timestamp.astimezone(timezone.utc)
+        label = f"{obs.sensor_id} {stamp.isoformat()}"
+        if (obs.sensor_id, stamp) in seen:
+            rejected.append(f"{label}: duplicate timestamp")
+            continue
+        seen.add((obs.sensor_id, stamp))
+        if obs.value is not None and not min_value <= obs.value <= max_value:
+            rejected.append(f"{label}: value {obs.value} outside [{min_value}, {max_value}]")
+            continue
+        if obs.timestamp.utcoffset() != timedelta(0):
+            obs = copy.copy(obs)
+            obs.timestamp = stamp
+        kept.append(obs)
+    return kept, rejected
