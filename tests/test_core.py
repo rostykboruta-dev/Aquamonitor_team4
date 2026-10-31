@@ -1,7 +1,29 @@
 import math
 import unittest
 
-from aquamonitor.core import moving_average, moving_median, moving_std
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from aquamonitor.core import (
+    hours_to_steps,
+    interpolation_error,
+    linear_interpolate,
+    moving_average,
+    moving_median,
+    moving_std,
+    naive_forecast,
+    nearest_interpolate,
+)
+from aquamonitor.dataio import parse_usgs_json
+from aquamonitor.domain import MissingDataError, Observation, Series
+
+START = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+SAMPLE = Path(__file__).parent / "data" / "usgs_sample.json"
+
+
+def make_series(points: list[tuple[int, float | None]]) -> Series:
+    """Build a Series from (minutes after START, value) pairs."""
+    return Series("S1", [Observation(START + timedelta(minutes=m), "S1", v) for m, v in points])
 
 
 class TestRollingStats(unittest.TestCase):
@@ -59,6 +81,97 @@ class TestRollingStats(unittest.TestCase):
             moving_median([1.0, None, 3.0], 2)
         with self.assertRaises(TypeError):
             moving_std([1.0, "a", 3.0], 2)
+
+
+class TestInterpolation(unittest.TestCase):
+    """Week 2: filling gaps and checking the quality of the filling."""
+
+    def test_linear_uses_real_time_between_points(self) -> None:
+        """A gap 10 minutes into a 40-minute interval gets a quarter of the change."""
+        series = make_series([(0, 1.0), (10, None), (40, 5.0)])
+
+        self.assertEqual(linear_interpolate(series), [1.0, 2.0, 5.0])
+
+    def test_gaps_at_the_edges_take_the_nearest_known_value(self) -> None:
+        series = make_series([(0, None), (5, 2.0), (10, 4.0), (15, None)])
+
+        self.assertEqual(linear_interpolate(series), [2.0, 2.0, 4.0, 4.0])
+        self.assertEqual(nearest_interpolate(series), [2.0, 2.0, 4.0, 4.0])
+
+    def test_nearest_takes_the_closer_point_and_the_earlier_on_a_tie(self) -> None:
+        series = make_series([(0, 1.0), (2, None), (5, None), (10, 9.0), (12, None), (14, 3.0)])
+
+        self.assertEqual(nearest_interpolate(series), [1.0, 1.0, 1.0, 9.0, 9.0, 3.0])
+
+    def test_result_has_no_gaps_and_works_with_moving_average(self) -> None:
+        series = make_series([(0, 1.0), (5, None), (10, None), (15, 4.0)])
+        filled = linear_interpolate(series)
+
+        self.assertEqual(filled, [1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(moving_average(filled, 2)[-1], 3.5)
+
+    def test_empty_series_gives_empty_list(self) -> None:
+        self.assertEqual(linear_interpolate(Series("S1")), [])
+
+    def test_bad_input_is_rejected(self) -> None:
+        with self.assertRaises(MissingDataError):
+            linear_interpolate(make_series([(0, None), (5, None)]))
+        with self.assertRaises(TypeError):
+            nearest_interpolate([1.0, None])  # type: ignore[arg-type]
+
+    def test_quality_check_on_hidden_points(self) -> None:
+        """On a straight line linear interpolation is exact, nearest is not."""
+        series = make_series([(5 * i, 0.1 * i) for i in range(20)])
+
+        self.assertAlmostEqual(interpolation_error(series, "linear", every=3), 0.0)
+        self.assertAlmostEqual(interpolation_error(series, "nearest", every=3), 0.1)
+
+    def test_quality_check_rejects_bad_arguments(self) -> None:
+        series = make_series([(5 * i, float(i)) for i in range(10)])
+        with self.assertRaises(ValueError):
+            interpolation_error(series, "cubic")
+        with self.assertRaises(ValueError):
+            interpolation_error(series, every=1)
+        with self.assertRaises(ValueError):
+            interpolation_error(make_series([(0, 1.0), (5, 2.0)]))
+
+    def test_quality_on_real_usgs_sample(self) -> None:
+        """On 5-minute USGS data linear interpolation errs by less than 0.05 ft."""
+        observations = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        series = Series(observations[0].sensor_id, observations)
+
+        self.assertLess(interpolation_error(series, "linear"), 0.05)
+
+
+class TestNaiveForecast(unittest.TestCase):
+
+    def test_repeats_the_last_value(self) -> None:
+        self.assertEqual(naive_forecast([2.0, 3.0, 3.5], 3), [3.5, 3.5, 3.5])
+
+    def test_invalid_horizon_or_values(self) -> None:
+        for bad in (0, -1, True, 2.5):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                naive_forecast([1.0], bad)
+        with self.assertRaises(ValueError):
+            naive_forecast([], 3)
+        with self.assertRaises(TypeError):
+            naive_forecast([1.0, None], 3)
+
+    def test_hours_to_steps_for_five_minute_data(self) -> None:
+        stamps = [START + timedelta(minutes=5 * i) for i in range(10)]
+
+        self.assertEqual(hours_to_steps(stamps, 12), 144)
+        self.assertEqual(hours_to_steps(stamps, 0.01), 1)
+
+    def test_hours_to_steps_rejects_bad_input(self) -> None:
+        stamps = [START, START + timedelta(minutes=5)]
+        for bad_hours in (0, -3, True):
+            with self.subTest(bad_hours), self.assertRaises(ValueError):
+                hours_to_steps(stamps, bad_hours)
+        with self.assertRaises(ValueError):
+            hours_to_steps([START], 12)
+        with self.assertRaises(ValueError):
+            hours_to_steps([START, START], 12)
 
 
 if __name__ == "__main__":
