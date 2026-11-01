@@ -3,11 +3,21 @@ import configparser
 import json
 import os
 import sys
-from statistics import median
 from typing import Any
 
-from aquamonitor.analytics import generate_console_report
-from aquamonitor.core import hours_to_steps, linear_interpolate, naive_forecast
+from aquamonitor.analytics import (
+    build_level_histogram,
+    build_time_series_plot,
+    format_metrics_table,
+    generate_console_report,
+)
+from aquamonitor.core import (
+    evaluate_forecast,
+    forecast_timestamps,
+    hours_to_steps,
+    linear_interpolate,
+    naive_forecast,
+)
 from aquamonitor.dataio import clean_observations, fetch_usgs_json, parse_usgs_json
 from aquamonitor.domain import HydroError, Observation, Series
 from aquamonitor.infra import log_call, logger, setup_logging, timed
@@ -106,7 +116,11 @@ def _run_fetch(args: argparse.Namespace, config: dict[str, Any]) -> None:
 def _run_report(args: argparse.Namespace, config: dict[str, Any]) -> None:
     """Read a saved JSON file and print the summary report."""
     group_by = args.group_by or config.get("group_by", "day")
-    print(generate_console_report(_load_series(args.input, args.sensor), group_by))
+    series = _load_series(args.input, args.sensor)
+    print(generate_console_report(series, group_by))
+    if args.plot:
+        build_level_histogram(series, args.plot)
+        print(f"[PLOT] Saved histogram to {args.plot}")
 
 
 @log_call
@@ -118,12 +132,21 @@ def _run_forecast(args: argparse.Namespace, config: dict[str, Any]) -> None:
     values = linear_interpolate(series)
     stamps = series.timestamps()
     steps = hours_to_steps(stamps, hours)
-    step = median(b - a for a, b in zip(stamps, stamps[1:]))
     forecast = naive_forecast(values, steps)
+    times = forecast_timestamps(stamps, steps)
     print(f"\n=== NAIVE FORECAST FOR SENSOR: {series.sensor_id} ===")
     print(f"Last observation : {stamps[-1].isoformat()}  {values[-1]:.2f}")
-    print(f"Horizon          : {hours} h ({steps} steps of {step})")
-    print(f"Forecast         : {forecast[0]:.2f} for every step until {(stamps[-1] + step * steps).isoformat()}")
+    print(f"Horizon          : {hours} h ({steps} steps of {times[0] - stamps[-1]})")
+    print(f"Forecast         : {forecast[0]:.2f} for every step until {times[-1].isoformat()}")
+    if len(values) > steps:
+        print(f"\nQuality on the last {hours} h held out ({steps} points):")
+        print(format_metrics_table(evaluate_forecast(values, steps)))
+    else:
+        print(f"\n[METRICS] Not enough data to evaluate: need more than {steps} points, "
+              f"the file has {len(values)}.")
+    if args.plot:
+        build_time_series_plot(series, args.plot, forecast=list(zip(times, forecast)))
+        print(f"[PLOT] Saved forecast plot to {args.plot}")
 
 
 def main() -> None:
@@ -146,11 +169,15 @@ def main() -> None:
     forecast_parser = subparsers.add_parser("forecast", help="Forecast hydrological indicators")
     forecast_parser.add_argument("--input", required=True, help="Path to input file")
     forecast_parser.add_argument("--sensor", help="Sensor id if the file has several")
-    forecast_parser.add_argument("--horizon", type=float, help="Forecast horizon in hours (default 12)")
+    forecast_parser.add_argument(
+        "--horizon", type=float, help="Forecast horizon in hours (default 12)"
+    )
+    forecast_parser.add_argument("--plot", help="Save the observed + forecast plot (PNG)")
 
     report_parser = subparsers.add_parser("report", help="Generate summary report")
     report_parser.add_argument("--input", required=True, help="Path to input file")
     report_parser.add_argument("--sensor", help="Sensor id if the file has several")
+    report_parser.add_argument("--plot", help="Save a histogram of levels (PNG)")
     report_parser.add_argument(
         "--group-by", choices=["day", "week", "month"], help="Aggregation period (default day)"
     )

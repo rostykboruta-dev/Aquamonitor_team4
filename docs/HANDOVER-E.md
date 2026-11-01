@@ -76,3 +76,33 @@
 2. Встановіть пакет у режимі розробки:
 ```bash
    pip install -e . && python -m unittest discover -s tests && aquamonitor report --input tests/data/usgs_sample.json
+   ```
+
+---
+
+## Тиждень 3
+**Date:** 2026-11-01
+**Author:** Антоняк Констянтин
+
+## 1. Зроблено
+* `report --plot FILE` зберігає гістограму рівнів, `forecast --plot FILE` — графік «факт + прогноз»; помилка запису (наприклад, немає папки) дає `Error` і код 1.
+* Пункт 3 переліку: скрипт `run_tests.py` запускає всі тести з будь-якої папки й без `pip install -e .`; README з нумерацією студентів, ротацією, встановленням, командами й правилами.
+* Тести CLI більше не створюють `aquamonitor.log`: `setup_logging` у `test_cli.py` замінено заглушкою.
+* Стиль: довгі рядки в `cli.py`, `test_cli.py`, `test_infra.py` розбиті до 100 символів, у файлах ролі E додано перенос рядка в кінці.
+* `forecast` друкує таблицю RMSE/MAE/MAPE/R2: відкладає останні `--horizon` годин і оцінює на них наївний прогноз через `evaluate_forecast` ролі C. Якщо даних не більше, ніж горизонт, прогноз друкується з приміткою, без помилки. Мітки часу прогнозу беруться з `forecast_timestamps`, власний підрахунок кроку прибрано.
+* 5 нових тестів CLI (`--plot` для `report` і `forecast`, папка, якої немає, метрики, замалий файл).
+
+## 2. Не зроблено
+* `@retry(n)`, `@cached`, `level_range` з конфігурації.
+
+## 3. Проблеми
+* `matplotlib` є в `requirements.txt`, але не в `dependencies` у `pyproject.toml`.
+
+## 4. Обережно
+* Не прибирайте заглушку `setup_logging` у `test_cli.py`, інакше тести знову створюватимуть `aquamonitor.log` у корені.
+
+## 5. Як запустити
+```bash
+python run_tests.py
+aquamonitor report --input tests/data/usgs_sample.json --plot levels.png
+```

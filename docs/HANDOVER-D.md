@@ -66,3 +66,35 @@
 2. Встановіть пакет і запустіть тести однією командою:
    ```bash
    pip install -e . && python -m unittest tests.test_analytics -v
+   ```
+
+---
+
+## Тиждень 3
+**Date:** 2026-11-01
+**Author:** Антоняк Констянтин
+
+## 1. Зроблено
+* Пункт 2 переліку: два графіки matplotlib.
+  * `build_time_series_plot(series, output_path, forecast=None, unit="m")` — рівень у часі; пропуски розривають лінію, прогноз малюється червоним пунктиром.
+  * `build_level_histogram(series, output_path, bins=20, unit="m")` — розподіл рівнів, пропуски не враховуються.
+* Пункт 3 переліку: єдиний стиль — `PLOT_STYLE` і `styled_figure(title, xlabel, ylabel)` (розмір, сітка, кольори, підписи осей з одиницями); обидва графіки його використовують.
+* У рядку таблиці звіту довгі f-рядки розбиті до 100 символів.
+* Таблиця якості прогнозу `format_metrics_table(metrics, unit="m")`: RMSE і MAE в одиницях ряду, MAPE у відсотках, `NaN` показується як `-`.
+* 5 нових тестів у `tests/test_analytics.py`: збереження PNG, гістограма, стиль, таблиця метрик, помилкові дані.
+
+## 2. Ухвалені рішення
+* Графіки будуються через `matplotlib.figure.Figure`, без `pyplot`: не потрібне вікно, нічого не змінюється глобально, і така фігура підійде для вікна tkinter у спринті 2.
+* `matplotlib` імпортується всередині функцій, тож пакет і команди без `--plot` працюють навіть без нього.
+
+## 3. Не зроблено
+* Конвеєр Pandas, зведені таблиці й Jupyter-звіт — спринт 2.
+
+## 4. Обережно
+* Для тестів графіків потрібен `matplotlib` з `requirements.txt` (`pip install -r requirements.txt`).
+
+## 5. Як запустити
+```bash
+python run_tests.py
+aquamonitor forecast --input tests/data/usgs_sample.json --horizon 2 --plot forecast.png
+```
