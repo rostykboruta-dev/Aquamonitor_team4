@@ -37,6 +37,9 @@
 2. Запустіть тести CLI через `unittest` у **Git Bash**:
    ```bash
    PYTHONPATH=src python -m unittest tests/test_cli.py
+   ```
+
+---
 
 # Тиждень 2
 **Date:** 2026-10-20  

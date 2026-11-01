@@ -38,7 +38,8 @@
 2. Запустіть тести аналітики через `unittest`:
    ```bash
    PYTHONPATH=src python -m unittest tests/test_analytics.py
-   
+   ```
+
 ---
 # Тиждень 2
 **Date:** 2026-11-01  
