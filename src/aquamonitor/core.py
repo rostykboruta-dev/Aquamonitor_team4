@@ -1,3 +1,4 @@
+import math
 from bisect import bisect_left
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -305,3 +306,29 @@ def forecast_timestamps(timestamps: list[datetime], steps: int) -> list[datetime
     _check_horizon(steps)
     step = _median_step(timestamps)
     return [timestamps[-1] + step * n for n in range(1, steps + 1)]
+
+
+def calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]:
+    """Compare a forecast with the facts: RMSE, MAE, MAPE (%) and R2.
+
+    MAPE skips points where the true value is 0 and is NaN if all of them are 0.
+    R2 is NaN when the true values are all equal.
+
+    Raises:
+        ValueError: If the lists are empty or have different lengths.
+        TypeError: If a list contains non-numeric items.
+    """
+    _validate(y_true, 1)
+    _validate(y_pred, 1)
+    if len(y_true) != len(y_pred):
+        raise ValueError("y_true and y_pred must have the same length.")
+    errors = [p - t for t, p in zip(y_true, y_pred)]
+    ratios = [abs(e / t) for t, e in zip(y_true, errors) if t != 0]
+    mean_true = _mean(y_true)
+    total = sum((t - mean_true) ** 2 for t in y_true)
+    return {
+        "RMSE": math.sqrt(_mean([e * e for e in errors])),
+        "MAE": _mean([abs(e) for e in errors]),
+        "MAPE": _mean(ratios) * 100 if ratios else math.nan,
+        "R2": 1 - sum(e * e for e in errors) / total if total else math.nan,
+    }

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aquamonitor.core import (
+    calculate_metrics,
     forecast_timestamps,
     hours_to_steps,
     interpolation_error,
@@ -209,6 +210,34 @@ class TestForecastTimestamps(unittest.TestCase):
             forecast_timestamps(stamps[:1], 3)
         with self.assertRaises(ValueError):
             forecast_timestamps(stamps, 0)
+
+
+class TestMetrics(unittest.TestCase):
+
+    def test_metrics_on_hand_calculated_example(self) -> None:
+        """Errors 1, -1, 2 on facts 2, 4, 8 give known RMSE, MAE, MAPE and R2."""
+        result = calculate_metrics([2, 4, 8], [3, 3, 10])
+
+        self.assertAlmostEqual(result["RMSE"], math.sqrt(2.0))
+        self.assertAlmostEqual(result["MAE"], 4 / 3)
+        self.assertAlmostEqual(result["MAPE"], (0.5 + 0.25 + 0.25) / 3 * 100)
+        self.assertAlmostEqual(result["R2"], 1 - 6 / (56 / 3))
+
+    def test_perfect_forecast_and_zero_facts(self) -> None:
+        perfect = calculate_metrics([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+        self.assertEqual((perfect["RMSE"], perfect["MAE"], perfect["R2"]), (0.0, 0.0, 1.0))
+
+        with_zero = calculate_metrics([0, 2], [1, 3])
+        self.assertAlmostEqual(with_zero["MAPE"], 50.0)
+        self.assertTrue(math.isnan(calculate_metrics([0, 0], [1, 1])["MAPE"]))
+        self.assertTrue(math.isnan(calculate_metrics([5, 5], [5, 6])["R2"]))
+
+    def test_bad_input_is_rejected(self) -> None:
+        for y_true, y_pred in (([1, 2], [1]), ([], []), ([1], [])):
+            with self.subTest((y_true, y_pred)), self.assertRaises(ValueError):
+                calculate_metrics(y_true, y_pred)
+        with self.assertRaises(TypeError):
+            calculate_metrics([1, None], [1, 2])  # type: ignore[list-item]
 
 
 if __name__ == "__main__":
