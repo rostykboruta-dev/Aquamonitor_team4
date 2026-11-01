@@ -136,7 +136,13 @@ def _gap_context(series: Series) -> tuple[list[float | None], list[float], list[
     return values, times, known
 
 
-def linear_interpolate(series: Series) -> list[float]:
+def _check_gap(seconds: float, limit: float | None) -> None:
+    """Raise MissingDataError if a gap is longer than the limit in seconds."""
+    if limit is not None and seconds > limit:
+        raise MissingDataError(f"gap of {seconds / 3600:.1f} h is longer than allowed.")
+
+
+def linear_interpolate(series: Series, max_gap: timedelta | None = None) -> list[float]:
     """Fill missing values (None) by linear interpolation in time.
 
     A gap between two known points is filled on the straight line between
@@ -145,15 +151,20 @@ def linear_interpolate(series: Series) -> list[float]:
 
     Args:
         series: Time series with possible missing values.
+        max_gap: Longest gap that may be filled (time between the known
+            neighbours, or to the nearest known point at the edges);
+            None means no limit.
 
     Returns:
         One value per observation, without None; an empty series gives [].
 
     Raises:
         TypeError: If series is not a Series.
-        MissingDataError: If the series has no known values at all.
+        MissingDataError: If the series has no known values at all or a gap
+            is longer than max_gap.
     """
     values, times, known = _gap_context(series)
+    limit = None if max_gap is None else max_gap.total_seconds()
     result: list[float] = []
     for i, value in enumerate(values):
         if value is not None:
@@ -161,10 +172,13 @@ def linear_interpolate(series: Series) -> list[float]:
             continue
         k = bisect_left(known, i)
         if k == 0 or k == len(known):
-            result.append(values[known[min(k, len(known) - 1)]])
+            edge = known[min(k, len(known) - 1)]
+            _check_gap(abs(times[edge] - times[i]), limit)
+            result.append(values[edge])
             continue
         left, right = known[k - 1], known[k]
         span = times[right] - times[left]
+        _check_gap(span, limit)
         share = (times[i] - times[left]) / span if span else 0.0
         result.append(values[left] + (values[right] - values[left]) * share)
     return result

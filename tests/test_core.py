@@ -174,5 +174,22 @@ class TestNaiveForecast(unittest.TestCase):
             hours_to_steps([START, START], 12)
 
 
+class TestMaxGap(unittest.TestCase):
+
+    def test_max_gap_blocks_long_gaps_only(self) -> None:
+        series = make_series([(0, 1.0), (60, None), (120, 3.0), (130, None), (140, 5.0)])
+
+        with self.assertRaises(MissingDataError):
+            linear_interpolate(series, max_gap=timedelta(hours=1))
+        self.assertEqual(linear_interpolate(series, max_gap=timedelta(hours=2))[1], 2.0)
+        self.assertEqual(linear_interpolate(series)[1], 2.0)
+
+    def test_max_gap_applies_to_the_edges(self) -> None:
+        series = make_series([(0, None), (180, 4.0)])
+
+        with self.assertRaises(MissingDataError):
+            linear_interpolate(series, max_gap=timedelta(hours=1))
+
+
 if __name__ == "__main__":
     unittest.main()
