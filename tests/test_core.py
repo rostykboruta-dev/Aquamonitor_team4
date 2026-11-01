@@ -5,6 +5,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aquamonitor.core import (
+    evaluate_forecast,
+    walk_forward,
+    calculate_metrics,
+    forecast_timestamps,
     hours_to_steps,
     interpolation_error,
     linear_interpolate,
@@ -172,6 +176,111 @@ class TestNaiveForecast(unittest.TestCase):
             hours_to_steps([START], 12)
         with self.assertRaises(ValueError):
             hours_to_steps([START, START], 12)
+
+
+class TestMaxGap(unittest.TestCase):
+
+    def test_max_gap_blocks_long_gaps_only(self) -> None:
+        series = make_series([(0, 1.0), (60, None), (120, 3.0), (130, None), (140, 5.0)])
+
+        with self.assertRaises(MissingDataError):
+            linear_interpolate(series, max_gap=timedelta(hours=1))
+        self.assertEqual(linear_interpolate(series, max_gap=timedelta(hours=2))[1], 2.0)
+        self.assertEqual(linear_interpolate(series)[1], 2.0)
+
+    def test_max_gap_applies_to_the_edges(self) -> None:
+        series = make_series([(0, None), (180, 4.0)])
+
+        with self.assertRaises(MissingDataError):
+            linear_interpolate(series, max_gap=timedelta(hours=1))
+
+
+class TestForecastTimestamps(unittest.TestCase):
+
+    def test_forecast_timestamps_continue_the_series(self) -> None:
+        stamps = [START + timedelta(minutes=5 * i) for i in range(4)]
+
+        result = forecast_timestamps(stamps, 3)
+
+        self.assertEqual(result[0], START + timedelta(minutes=20))
+        self.assertEqual(result[-1], START + timedelta(minutes=30))
+
+    def test_forecast_timestamps_reject_bad_input(self) -> None:
+        stamps = [START + timedelta(minutes=5 * i) for i in range(4)]
+
+        with self.assertRaises(ValueError):
+            forecast_timestamps(stamps[:1], 3)
+        with self.assertRaises(ValueError):
+            forecast_timestamps(stamps, 0)
+
+
+class TestMetrics(unittest.TestCase):
+
+    def test_metrics_on_hand_calculated_example(self) -> None:
+        """Errors 1, -1, 2 on facts 2, 4, 8 give known RMSE, MAE, MAPE and R2."""
+        result = calculate_metrics([2, 4, 8], [3, 3, 10])
+
+        self.assertAlmostEqual(result["RMSE"], math.sqrt(2.0))
+        self.assertAlmostEqual(result["MAE"], 4 / 3)
+        self.assertAlmostEqual(result["MAPE"], (0.5 + 0.25 + 0.25) / 3 * 100)
+        self.assertAlmostEqual(result["R2"], 1 - 6 / (56 / 3))
+
+    def test_perfect_forecast_and_zero_facts(self) -> None:
+        perfect = calculate_metrics([1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+        self.assertEqual((perfect["RMSE"], perfect["MAE"], perfect["R2"]), (0.0, 0.0, 1.0))
+
+        with_zero = calculate_metrics([0, 2], [1, 3])
+        self.assertAlmostEqual(with_zero["MAPE"], 50.0)
+        self.assertTrue(math.isnan(calculate_metrics([0, 0], [1, 1])["MAPE"]))
+        self.assertTrue(math.isnan(calculate_metrics([5, 5], [5, 6])["R2"]))
+
+    def test_bad_input_is_rejected(self) -> None:
+        for y_true, y_pred in (([1, 2], [1]), ([], []), ([1], [])):
+            with self.subTest((y_true, y_pred)), self.assertRaises(ValueError):
+                calculate_metrics(y_true, y_pred)
+        with self.assertRaises(TypeError):
+            calculate_metrics([1, None], [1, 2])  # type: ignore[list-item]
+
+
+class TestEvaluation(unittest.TestCase):
+
+    def test_evaluate_forecast_holds_out_the_last_points(self) -> None:
+        """The naive forecast repeats 3, the held-out facts are 4 and 5."""
+        result = evaluate_forecast([1, 2, 3, 4, 5], 2)
+
+        self.assertAlmostEqual(result["MAE"], 1.5)
+        self.assertAlmostEqual(result["RMSE"], math.sqrt(2.5))
+
+    def test_evaluate_forecast_rejects_bad_horizon(self) -> None:
+        for horizon in (0, -1, 5, 1.5, True):
+            with self.subTest(horizon), self.assertRaises(ValueError):
+                evaluate_forecast([1, 2, 3, 4, 5], horizon)  # type: ignore[arg-type]
+
+    def test_walk_forward_on_a_straight_line(self) -> None:
+        """On 0, 1, 2, ... the naive forecast for 1 step is always off by 1."""
+        result = walk_forward([float(i) for i in range(10)], horizon=1, min_train=3)
+
+        self.assertAlmostEqual(result["MAE"], 1.0)
+        self.assertAlmostEqual(result["RMSE"], 1.0)
+
+    def test_walk_forward_averages_several_windows(self) -> None:
+        """Two windows of 2 points are averaged into one result."""
+        result = walk_forward([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], horizon=2, min_train=2)
+
+        self.assertAlmostEqual(result["MAE"], 1.5)
+
+    def test_walk_forward_rejects_short_series(self) -> None:
+        with self.assertRaises(ValueError):
+            walk_forward([1.0, 2.0, 3.0], horizon=2, min_train=3)
+
+    def test_real_sample_metrics_use_the_cli_horizon(self) -> None:
+        observations = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        values = linear_interpolate(Series(observations[0].sensor_id, observations))
+
+        result = evaluate_forecast(values, 12)
+
+        self.assertGreaterEqual(result["MAE"], 0.0)
+        self.assertGreaterEqual(result["RMSE"], result["MAE"])
 
 
 if __name__ == "__main__":

@@ -72,8 +72,8 @@
 * `moving_average(values: list[float], window: int) -> list[float]` — calculates moving average.
 * `moving_median(values: list[float], window: int) -> list[float]` — calculates moving median.
 * `moving_std(values: list[float], window: int) -> list[float]` — calculates moving sample standard deviation (N - 1); a window of one element gives 0.0.
-* `linear_interpolate(series: Series) -> list[float]` — restores missing values (`None`) in a `Series`.
-* `calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]` — returns a dictionary of evaluation metrics with keys `{"RMSE": float, "MAE": float}`.
+* `linear_interpolate(series: Series, max_gap: timedelta | None = None) -> list[float]` — restores missing values (`None`) in a `Series`; a gap longer than `max_gap` raises `MissingDataError`.
+* `calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, float]` — returns `{"RMSE", "MAE", "MAPE", "R2"}`; MAPE is in percent and skips points where the true value is 0; MAPE and R2 are `NaN` when they are undefined; empty lists or different lengths raise `ValueError`.
 
 Added in week 2 (role C):
 * `linear_interpolate` fills `None` linearly in real time between the known neighbours; gaps at the start or the end
@@ -88,6 +88,12 @@ Added in week 2 (role C):
   (baseline for Demonstration 1); `horizon` is counted in steps of the series.
 * `hours_to_steps(timestamps: list[datetime], hours: float) -> int` — converts a horizon in hours to steps using
   the median interval between timestamps (5-minute data: 12 hours = 144 steps).
+
+Added in week 3 (role C):
+* `evaluate_forecast(values: list[float], horizon: int, forecaster=naive_forecast) -> dict[str, float]` — holds out the last `horizon` points, forecasts them from the rest and returns the `calculate_metrics` result; this is what `forecast` in the CLI calls for Demonstration 1. The series must be longer than `horizon` and without gaps.
+* `walk_forward(values: list[float], horizon: int, min_train: int, forecaster=naive_forecast) -> dict[str, float]` — moves the cut forward by `horizon` points from `min_train`, forecasts the next `horizon` points each time and averages the metrics (windows where a metric is `NaN` are left out of its average); a too short series raises `ValueError`.
+* `forecast_timestamps(timestamps: list[datetime], steps: int) -> list[datetime]` — times of the next `steps` forecast points, step = median interval; used to draw "facts + forecast" on the time axis.
+
 
 ---
 
