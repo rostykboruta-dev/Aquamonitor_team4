@@ -2,6 +2,7 @@ import json
 import math
 import re
 import copy
+import statistics
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -199,12 +200,46 @@ def parse_log_line(line: str) -> Observation:
                        _FLAGS[match["flag"]])
 
 
+def _find_spikes(observations: list[Observation], window: int, n_sigmas: float,
+                 min_deviation: float) -> dict[int, str]:
+    """Hampel filter: finds values far from the median of their neighbours.
+
+    Observations must be sorted by (sensor_id, time); each sensor is checked
+    on its own, missing values are skipped. A value is a spike when it differs
+    from the median of `window` neighbours on each side by more than
+    `n_sigmas` robust deviations and by more than `min_deviation`. A steady
+    rise is not a spike because the median follows the trend.
+
+    Returns:
+        Index in `observations` -> reason for every spike.
+    """
+    groups: dict[str, list[int]] = {}
+    for index, obs in enumerate(observations):
+        if obs.value is not None:
+            groups.setdefault(obs.sensor_id, []).append(index)
+    spikes: dict[int, str] = {}
+    for indexes in groups.values():
+        values = [observations[i].value for i in indexes]
+        for pos, index in enumerate(indexes):
+            near = values[max(0, pos - window): pos + window + 1]
+            centre = statistics.median(near)
+            mad = statistics.median(abs(x - centre) for x in near)
+            limit = max(n_sigmas * 1.4826 * mad, min_deviation)
+            if abs(values[pos] - centre) > limit:
+                spikes[index] = (f"spike {values[pos]}: differs from median "
+                                 f"{centre:.3f} by more than {limit:.3f}")
+    return spikes
+
+
 def clean_observations(
         observations: list[Observation],
         min_value: float = -3.0,
         max_value: float = 30.0,
+        window: int = 5,
+        n_sigmas: float = 5.0,
+        min_deviation: float = 0.15,
 ) -> tuple[list[Observation], list[str]]:
-    """Cleans observations: UTC time, duplicates and out-of-range values.
+    """Cleans observations: UTC time, duplicates, out-of-range values and spikes.
 
     Values are in meters. Missing values (None) are gaps, not outliers, so they are kept.
     The result is sorted by (sensor_id, time).
@@ -213,10 +248,19 @@ def clean_observations(
         observations: Observations of any sensors and time offsets.
         min_value: Lowest allowed value (inclusive).
         max_value: Highest allowed value (inclusive).
+        window: Neighbours on each side that the spike check compares with.
+        n_sigmas: Spike threshold in robust standard deviations.
+        min_deviation: Smallest difference from the neighbours' median (meters)
+            that can be a spike, so normal noise on a flat river is kept.
 
     Returns:
         A tuple (cleaned observations, log of rejected records, one string each).
+
+    Raises:
+        ValueError: If window, n_sigmas or min_deviation is not positive.
     """
+    if window < 1 or n_sigmas <= 0 or min_deviation <= 0:
+        raise ValueError("window, n_sigmas and min_deviation must be positive.")
     kept: list[Observation] = []
     rejected: list[str] = []
     seen: set[tuple[str, datetime]] = set()
@@ -234,4 +278,9 @@ def clean_observations(
             obs = copy.copy(obs)
             obs.timestamp = stamp
         kept.append(obs)
-    return kept, rejected
+    spikes = _find_spikes(kept, window, n_sigmas, min_deviation)
+    for index in sorted(spikes):
+        obs = kept[index]
+        rejected.append(f"{obs.sensor_id} {obs.timestamp.isoformat()}: {spikes[index]}")
+    return [obs for i, obs in enumerate(kept) if i not in spikes], rejected
+

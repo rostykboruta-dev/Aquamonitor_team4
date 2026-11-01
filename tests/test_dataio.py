@@ -269,5 +269,48 @@ class TestUsgsUnitsAndStatus(unittest.TestCase):
             parse_usgs_json(json.dumps({"features": [item]}))
 
 
+class TestSpikes(unittest.TestCase):
+    """Week 3: statistical outliers in clean_observations."""
+
+    def setUp(self) -> None:
+        self.start = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
+
+    def level(self, minutes: int, value, sensor: str = "S1") -> Observation:
+        return Observation(self.start + timedelta(minutes=minutes), sensor, value)
+
+    def test_spike_is_rejected_with_reason(self) -> None:
+        data = [self.level(5 * i, 1.0 + 0.01 * (i % 2)) for i in range(12)]
+        data[6] = self.level(30, 2.5)
+        cleaned, rejected = clean_observations(data)
+
+        self.assertNotIn(2.5, [o.value for o in cleaned])
+        self.assertEqual(len(cleaned), 11)
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("spike 2.5", rejected[0])
+
+    def test_steady_rise_is_not_a_spike(self) -> None:
+        """A flood wave rising 0.1 m every 5 minutes is kept."""
+        data = [self.level(5 * i, 1.0 + 0.1 * i) for i in range(30)]
+
+        self.assertEqual(clean_observations(data), (data, []))
+
+    def test_sensors_are_checked_separately(self) -> None:
+        data = [self.level(5 * i, 1.0, "level") for i in range(8)]
+        data += [self.level(5 * i, 25.0, "other") for i in range(8)]
+
+        self.assertEqual(len(clean_observations(data)[0]), 16)
+
+    def test_real_sample_keeps_every_point(self) -> None:
+        observations = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        cleaned, rejected = clean_observations(observations)
+
+        self.assertEqual((len(cleaned), rejected), (len(observations), []))
+
+    def test_invalid_spike_parameters(self) -> None:
+        for kwargs in ({"window": 0}, {"n_sigmas": 0}, {"min_deviation": -1.0}):
+            with self.subTest(kwargs), self.assertRaises(ValueError):
+                clean_observations([], **kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()
