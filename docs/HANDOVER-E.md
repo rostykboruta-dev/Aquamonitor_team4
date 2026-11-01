@@ -37,3 +37,39 @@
 2. Запустіть тести CLI через `unittest` у **Git Bash**:
    ```bash
    PYTHONPATH=src python -m unittest tests/test_cli.py
+
+# Тиждень 2
+**Date:** 2026-10-20  
+**Author:** Бачинський Олег  
+
+## 1. Зроблено
+* **CLI інтеграція з модулями**:
+  * Реалізовано команду `fetch --site --period --out`.
+  * Реалізовано команду `report --input [--sensor] [--group-by]`.
+  * Реалізовано команду `forecast --input [--sensor] [--horizon]` (горизонт у годинах).
+* **Обробка помилок та логування (`infra.py`)**:
+  * Помилки дають `Error: ...` і код `1` без трейсбека.
+  * Реалізовано декоратори `@timed`, `@log_call` (помилка з трейсбеком) та функцію `setup_logging` у файл `aquamonitor.log`.
+* **Робота з конфігурацією**:
+  * Конфіг реально використовується (period, group_by, horizon), аргумент має пріоритет.
+  * `load_config` перенесено в `try`. INI читається із секції `[aquamonitor]`. JSON, що не є об'єктом, дає `ValueError`.
+* **Тестування**:
+  * Переписано `test_cli.py`, додано новий `test_infra.py`; усього 134, усі зелені.
+
+## 2. Не зроблено
+* Декоратори `@retry`, `@cached`.
+* `level_range` з конфігу.
+
+## 3. Проблеми
+* `matplotlib` є в `requirements.txt`, але не в `dependencies` у `pyproject.toml`.
+* `setup_logging` налаштовує кореневий логер.
+* Декоратори без `ParamSpec`, тому сигнатури втрачаються для `mypy`.
+
+## 4. Обережно
+* У тестах патчіть `aquamonitor.cli.setup_logging`, інакше з'явиться `aquamonitor.log`.
+
+## 5. Як запустити
+1. Переконайтеся, що ви перебуваєте в корені репозиторію та активовано віртуальне середовище (`.venv`).
+2. Встановіть пакет у режимі розробки:
+```bash
+   pip install -e . && python -m unittest discover -s tests && aquamonitor report --input tests/data/usgs_sample.json
