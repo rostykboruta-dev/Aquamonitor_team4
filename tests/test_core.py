@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aquamonitor.core import (
+    forecast_timestamps,
     hours_to_steps,
     interpolation_error,
     linear_interpolate,
@@ -189,6 +190,25 @@ class TestMaxGap(unittest.TestCase):
 
         with self.assertRaises(MissingDataError):
             linear_interpolate(series, max_gap=timedelta(hours=1))
+
+
+class TestForecastTimestamps(unittest.TestCase):
+
+    def test_forecast_timestamps_continue_the_series(self) -> None:
+        stamps = [START + timedelta(minutes=5 * i) for i in range(4)]
+
+        result = forecast_timestamps(stamps, 3)
+
+        self.assertEqual(result[0], START + timedelta(minutes=20))
+        self.assertEqual(result[-1], START + timedelta(minutes=30))
+
+    def test_forecast_timestamps_reject_bad_input(self) -> None:
+        stamps = [START + timedelta(minutes=5 * i) for i in range(4)]
+
+        with self.assertRaises(ValueError):
+            forecast_timestamps(stamps[:1], 3)
+        with self.assertRaises(ValueError):
+            forecast_timestamps(stamps, 0)
 
 
 if __name__ == "__main__":

@@ -244,6 +244,12 @@ def interpolation_error(series: Series, method: str = "linear", every: int = 5) 
     return sum(abs(restored[i] - values[i]) for i in hidden) / len(hidden)
 
 
+def _check_horizon(horizon: int) -> None:
+    """Raise ValueError if horizon is not a positive integer."""
+    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
+        raise ValueError("horizon must be an integer greater than 0.")
+
+
 def naive_forecast(values: list[float], horizon: int) -> list[float]:
     """Forecast the next `horizon` steps by repeating the last value.
 
@@ -253,10 +259,23 @@ def naive_forecast(values: list[float], horizon: int) -> list[float]:
         ValueError: If horizon is not a positive integer or values is empty.
         TypeError: If values contains non-numeric items (fill gaps first).
     """
-    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
-        raise ValueError("horizon must be an integer greater than 0.")
+    _check_horizon(horizon)
     _validate(values, 1)
     return [float(values[-1])] * horizon
+
+
+def _median_step(timestamps: list[datetime]) -> timedelta:
+    """Return the median interval between timestamps.
+
+    Raises:
+        ValueError: If there are fewer than two timestamps or they do not increase.
+    """
+    if len(timestamps) < 2:
+        raise ValueError("at least two timestamps are needed to know the step.")
+    step = median(b - a for a, b in zip(timestamps, timestamps[1:]))
+    if step <= timedelta(0):
+        raise ValueError("timestamps must increase.")
+    return step
 
 
 def hours_to_steps(timestamps: list[datetime], hours: float) -> int:
@@ -271,9 +290,18 @@ def hours_to_steps(timestamps: list[datetime], hours: float) -> int:
     """
     if not isinstance(hours, (int, float)) or isinstance(hours, bool) or hours <= 0:
         raise ValueError("hours must be a positive number.")
-    if len(timestamps) < 2:
-        raise ValueError("at least two timestamps are needed to know the step.")
-    step = median(b - a for a, b in zip(timestamps, timestamps[1:]))
-    if step <= timedelta(0):
-        raise ValueError("timestamps must increase.")
-    return max(1, round(timedelta(hours=hours) / step))
+    return max(1, round(timedelta(hours=hours) / _median_step(timestamps)))
+
+
+def forecast_timestamps(timestamps: list[datetime], steps: int) -> list[datetime]:
+    """Return the times of the next `steps` forecast points after the series.
+
+    The step is the median interval between `timestamps`, so the result
+    can be drawn on the time axis next to the facts.
+
+    Raises:
+        ValueError: If steps is not a positive integer or the step is unknown.
+    """
+    _check_horizon(steps)
+    step = _median_step(timestamps)
+    return [timestamps[-1] + step * n for n in range(1, steps + 1)]
