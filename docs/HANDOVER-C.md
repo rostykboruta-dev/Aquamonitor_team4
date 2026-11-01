@@ -103,3 +103,51 @@ python -m unittest discover -s tests
 $env:PYTHONPATH="src"
 python -m unittest tests.test_core -v
 ```
+
+---
+
+## Тиждень 3
+
+**Date:** 2026-11-01
+**Author:** Борута Ростислав
+
+### 1. Зроблено
+
+* Закрито пункт 3 переліку: `calculate_metrics(y_true, y_pred)` повертає `RMSE`, `MAE`, `MAPE` (у відсотках) і `R2`; помилка `ValueError` на порожні списки та різну довжину.
+* `walk_forward(values, horizon, min_train)` усереднює метрики за вікнами, що зсуваються на `horizon` точок.
+* Для демонстрації 1: `evaluate_forecast(values, horizon)` відкладає останні `horizon` точок, прогнозує їх через `naive_forecast` і повертає метрики; `forecast` у CLI має викликати саме її.
+* Борг з рев'ю PR №9: `linear_interpolate(series, max_gap)` не заповнює пропуски довші за `max_gap` (`MissingDataError`); `forecast_timestamps(timestamps, steps)` дає мітки часу точок прогнозу для графіка «факт + прогноз»; `interpolation_error` тепер рахує MAE через `calculate_metrics`.
+* Друкарська помилка в HANDOVER-A виправлена.
+* 13 нових тестів у `tests/test_core.py` (усього 124 у проєкті), зокрема на помилкові дані, нульові факти й реальний зразок USGS. Спринт 1 ролі C закрито.
+
+### 2. Рефакторинг
+
+* Винесено `_check_horizon` (перевірка горизонту) і `_median_step` (медіанний крок): вони потрібні кільком функціям. `interpolation_error` переведено на `calculate_metrics`, щоб метрики були реалізовані в одному місці. Сигнатури наявних функцій не змінилися, `max_gap` має значення за замовчуванням.
+
+### 3. Не зроблено
+
+* Векторизація на NumPy, регресійна модель, AR(p) і довірча смуга: спринт 2.
+
+### 4. Проблеми
+
+* `MAPE` і `R2` можуть бути `NaN` (нульові факти, однакові факти): виводити їх у таблиці треба без падіння.
+* `_run_forecast` у `cli.py` досі рахує крок власним кодом: його має замінити на `hours_to_steps` і `evaluate_forecast` власник ролі E.
+* `max_gap` кидає виняток замість того, щоб лишити `None`: тип результату `list[float]` не змінюється, але в CLI це треба перехопити.
+* `walk_forward` збільшує навчальну вибірку з кожним вікном (розширюване вікно); ковзне вікно фіксованої довжини можна додати у спринті 2.
+
+### 5. Далі
+
+* (роль E): підключити `evaluate_forecast` і `forecast_timestamps` у команду `forecast` (демонстрація 1).
+* Спринт 2: векторизація на NumPy, регресійна модель, AR(p).
+
+### 6. Обережно
+
+* Ряд для `evaluate_forecast` і `walk_forward` має бути без `None`: спершу `linear_interpolate`.
+* Сигнатури зафіксовані в `docs/spec.md`, розділ 3.
+
+### 7. Як запустити
+
+```
+$env:PYTHONPATH="src"
+python -m unittest tests.test_core -v
+```
