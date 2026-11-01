@@ -92,16 +92,52 @@ Added in week 2 (role C):
 
 ## 4. Analytics (`src/aquamonitor/analytics.py`)
 
-* `aggregate_series_stats(series: Series) -> dict[str, float | int]` — calculates aggregate statistics and returns a dictionary in the format `{"min": float, "max": float, "avg": float, "count": int, "missing_count": int}`.
-* `build_time_series_plot(series: Series, output_path: str) -> None` — builds and saves a line plot of levels over time in PNG format at `output_path`.
+* `Period = Literal["day", "week", "month"]`.
+* `aggregate_by_period(series: Series, period: Period = "day") -> dict[str, dict[str, float | int | None]]`
+  — groups observations by period and computes statistics.
+  * Keys: `"YYYY-MM-DD"` (day), `"YYYY-Www"` (ISO 8601 week, e.g. 2025-12-29 belongs to `"2026-W01"`), `"YYYY-MM"` (month);
+    grouping uses the time zone of the timestamps (UTC for USGS data); keys go in chronological order.
+  * Values: `{"min", "max", "avg", "count", "missing_count"}`; `min`/`max`/`avg` are rounded to 2 digits and are
+    `None` for a period in which every value is missing.
+  * An unknown `period` raises `ValueError` (checked before the loop, so also for an empty series).
+* `generate_console_report(series: Series, period: Period = "day") -> str` — returns the summary table as text;
+  it does not print (the CLI prints it). A `None` statistic is shown as `-`.
+
+Planned (week 3, role D):
+* `build_time_series_plot(...)` — PNG line plot "observed + forecast" (matplotlib, `Agg` backend).
+* A histogram of levels and one common plot style used by both plots.
 
 ---
 
 ## 5. Infrastructure and CLI (`src/aquamonitor/infra.py`, `cli.py`)
 
-* `@timed` — decorator to measure function execution time.
-* `setup_logging(log_filename: str = "aquamonitor.log") -> None` — configures logging.
-* `load_config(config_path: str) -> dict` — loads configuration settings from a JSON file.
-* **CLI Commands**:
-  * `aquamonitor fetch --input <file_path>`
-  * `aquamonitor report --input <file_path>`
+### `infra.py`
+* `logger` — the `"aquamonitor"` logger used by the whole package.
+* `setup_logging(log_filename: str = "aquamonitor.log") -> None` — writes INFO and higher to the file
+  (UTF-8, `asctime levelname name: message`); called once at the start of `main()`.
+* `@timed` — logs the execution time of the function at INFO, also when it raises.
+* `@log_call` — logs every call and, if the function raises, the exception with its traceback, then re-raises it.
+
+### `cli.py`
+* `load_config(config_path: str) -> dict[str, Any]`
+  * `.json` — one object with the settings at the top level; a JSON that is broken or is not an object raises `ValueError`.
+  * `.ini` — the `[aquamonitor]` section; values stay strings; a broken file raises `ValueError`.
+  * A missing file or a missing `[aquamonitor]` section logs a warning and returns `{}`; another extension raises `ValueError`.
+  * Keys used now: `period` (for `fetch`), `group_by` (for `report`), `horizon` in hours (for `forecast`);
+    a command-line argument wins over the configuration.
+* `main() -> None` — `aquamonitor [--config FILE] <command>`, default `--config config.json`:
+  * `fetch --site CODE [--period P7D] --out FILE` — downloads gauge height (`00065`) with `fetch_usgs_json`
+    and saves the JSON text to `FILE`.
+  * `report --input FILE [--sensor ID] [--group-by day|week|month]` — reads a saved USGS JSON file,
+    runs `parse_usgs_json` and `clean_observations`, and prints `generate_console_report` (default `day`).
+  * `forecast --input FILE [--sensor ID] [--horizon HOURS]` — reads and cleans the file, fills gaps with
+    `linear_interpolate`, converts hours to steps with `hours_to_steps` and prints a naive forecast (default 12 hours).
+  * `--sensor` is required only when the file holds several sensors.
+  * The number of rejected records is printed to stderr as `[CLEAN] Rejected N records`; details go to the log.
+* Exit codes: `0` success; `1` — `HydroError`, `ValueError` or `OSError` (message `Error: ...` on stderr, no traceback)
+  or no command given (help is printed); `2` — invalid arguments (argparse).
+* Installation: `pip install -e .` provides the `aquamonitor` command; `python -m aquamonitor` runs the same `main()`.
+
+Planned (week 3, role E):
+* `forecast` prints RMSE/MAE of the naive forecast on the held-out last hours (needs `calculate_metrics`, role C).
+* `@retry(n)` for network errors in `fetch`, `@cached`; `level_range` for `LevelGauge` read from the configuration.
