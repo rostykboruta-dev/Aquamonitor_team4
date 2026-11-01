@@ -1,11 +1,32 @@
+from collections.abc import Callable
+from datetime import datetime
 from typing import Literal
+
 from aquamonitor.domain import Observation, Series
+
+Period = Literal["day", "week", "month"]
+
+
+def _week_key(moment: datetime) -> str:
+    """Return the ISO 8601 week key, e.g. '2026-W01'."""
+    year, week, _ = moment.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+_PERIOD_KEYS: dict[str, Callable[[datetime], str]] = {
+    "day": lambda moment: moment.strftime("%Y-%m-%d"),
+    "week": _week_key,
+    "month": lambda moment: moment.strftime("%Y-%m"),
+}
 
 
 def aggregate_by_period(
-    series: Series, period: Literal["day", "week", "month"] = "day"
-) -> dict[str, dict[str, float | int]]:
+    series: Series, period: Period = "day"
+) -> dict[str, dict[str, float | int | None]]:
     """Group observations by day, week, or month and compute statistical aggregates.
+
+    Weeks follow ISO 8601, so 2025-12-29 belongs to '2026-W01'.
+    A period in which every value is missing gets None for min, max and avg.
 
     Args:
         series (Series): Time series containing hydrological observations.
@@ -13,61 +34,51 @@ def aggregate_by_period(
             Defaults to "day".
 
     Returns:
-        dict[str, dict[str, float | int]]: A dictionary mapping each period key
-            (e.g., 'YYYY-MM-DD', 'YYYY-Www', 'YYYY-MM') to its statistical aggregates
-            ('min', 'max', 'avg', 'count', 'missing_count').
+        dict[str, dict[str, float | int | None]]: A dictionary mapping each period
+            key (e.g., 'YYYY-MM-DD', 'YYYY-Www', 'YYYY-MM') in chronological order
+            to its statistical aggregates ('min', 'max', 'avg', 'count',
+            'missing_count').
 
     Raises:
         ValueError: If an unsupported aggregation period is specified.
     """
+    if period not in _PERIOD_KEYS:
+        raise ValueError("Period must be one of: 'day', 'week', or 'month'")
+    make_key = _PERIOD_KEYS[period]
+
     grouped: dict[str, list[Observation]] = {}
+    for obs in series:
+        grouped.setdefault(make_key(obs.timestamp), []).append(obs)
 
-    for obs in series._observations:
-        if period == "day":
-            key = obs.timestamp.strftime("%Y-%m-%d")
-        elif period == "week":
-            year, week, _ = obs.timestamp.isocalendar()
-            key = f"{year}-W{week:02d}"
-        elif period == "month":
-            key = obs.timestamp.strftime("%Y-%m")
-        else:
-            raise ValueError("Period must be one of: 'day', 'week', or 'month'")
-
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(obs)
-
-    result: dict[str, dict[str, float | int]] = {}
-
+    result: dict[str, dict[str, float | int | None]] = {}
     for time_key, obs_list in grouped.items():
-        valid_vals: list[float] = [
-            obs.value for obs in obs_list if obs.value is not None
-        ]
-        missing_cnt = sum(1 for obs in obs_list if obs.is_missing())
-        total_cnt = len(obs_list)
-
+        valid_vals = [obs.value for obs in obs_list if obs.value is not None]
         if valid_vals:
-            min_val = float(min(valid_vals))
-            max_val = float(max(valid_vals))
-            avg_val = float(sum(valid_vals) / len(valid_vals))
+            min_val: float | None = round(min(valid_vals), 2)
+            max_val: float | None = round(max(valid_vals), 2)
+            avg_val: float | None = round(sum(valid_vals) / len(valid_vals), 2)
         else:
-            min_val = max_val = avg_val = 0.0
+            min_val = max_val = avg_val = None
 
         result[time_key] = {
-            "min": round(min_val, 2),
-            "max": round(max_val, 2),
-            "avg": round(avg_val, 2),
-            "count": total_cnt,
-            "missing_count": missing_cnt,
+            "min": min_val,
+            "max": max_val,
+            "avg": avg_val,
+            "count": len(obs_list),
+            "missing_count": len(obs_list) - len(valid_vals),
         }
-
     return result
 
 
-def generate_console_report(
-    series: Series, period: Literal["day", "week", "month"] = "day"
-) -> str:
-    """Format and print a consolidated summary report table to the console.
+def _fmt(value: float | None) -> str:
+    """Format a statistic for the report table; None becomes a dash."""
+    return f"{value:<8.2f}" if value is not None else f"{'-':<8}"
+
+
+def generate_console_report(series: Series, period: Period = "day") -> str:
+    """Build a consolidated summary report table; the caller prints it.
+
+    A period without known values shows '-' instead of numbers.
 
     Args:
         series (Series): Time series containing hydrological observations.
@@ -83,7 +94,7 @@ def generate_console_report(
         "day": "Date (YYYY-MM-DD)",
         "week": "Week (YYYY-Www)",
         "month": "Month (YYYY-MM)",
-    }[period]
+    }[period]  # period is already validated by aggregate_by_period
 
     lines = [
         f"\n=== SUMMARY REPORT FOR SENSOR: {series.sensor_id} ({period.upper()}) ===",
@@ -93,10 +104,8 @@ def generate_console_report(
 
     for time_key, agg in stats.items():
         lines.append(
-            f"{time_key:<20} | {agg['min']:<8.2f} | {agg['max']:<8.2f} | {agg['avg']:<8.2f} | {agg['count']:<6} | {agg['missing_count']:<8}"
+            f"{time_key:<20} | {_fmt(agg['min'])} | {_fmt(agg['max'])} | {_fmt(agg['avg'])} | {agg['count']:<6} | {agg['missing_count']:<8}"
         )
 
     lines.append("-" * 74)
-    report_str = "\n".join(lines)
-    print(report_str)
-    return report_str
+    return "\n".join(lines)
