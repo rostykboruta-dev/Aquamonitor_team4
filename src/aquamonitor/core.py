@@ -242,7 +242,8 @@ def interpolation_error(series: Series, method: str = "linear", every: int = 5) 
         for i, moment in enumerate(series.timestamps())
     ])
     restored = INTERPOLATORS[method](damaged)
-    return sum(abs(restored[i] - values[i]) for i in hidden) / len(hidden)
+    points = sorted(hidden)
+    return calculate_metrics([values[i] for i in points], [restored[i] for i in points])["MAE"]
 
 
 def _check_horizon(horizon: int) -> None:
