@@ -41,7 +41,9 @@ class TestAnalytics(unittest.TestCase):
         self.assertEqual(stats["2026-01-01"]["missing_count"], 0)
 
         self.assertIn("2026-01-02", stats)
-        self.assertEqual(stats["2026-01-02"]["min"], 0.0)
+        self.assertIsNone(stats["2026-01-02"]["min"])
+        self.assertIsNone(stats["2026-01-02"]["max"])
+        self.assertIsNone(stats["2026-01-02"]["avg"])
         self.assertEqual(stats["2026-01-02"]["count"], 1)
         self.assertEqual(stats["2026-01-02"]["missing_count"], 1)
 
@@ -51,16 +53,22 @@ class TestAnalytics(unittest.TestCase):
             aggregate_by_period(self.sample_series, period="year")  # type: ignore
 
     def test_generate_console_report(self) -> None:
-        """Test console report generation and stdout output."""
+        """Test that the report is returned as text and not printed."""
         with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
             report = generate_console_report(self.sample_series, period="day")
 
             self.assertIn("SUMMARY REPORT FOR SENSOR: S1", report)
             self.assertIn("2026-01-01", report)
             self.assertIn("15.00", report)
+            self.assertEqual(mock_stdout.getvalue(), "")
 
-            captured = mock_stdout.getvalue()
-            self.assertIn("SUMMARY REPORT FOR SENSOR: S1", captured)
+    def test_report_shows_dash_for_period_without_values(self) -> None:
+        """Test that a period with only missing values shows dashes, not zeros."""
+        report = generate_console_report(self.sample_series, period="day")
+        row = next(line for line in report.splitlines() if line.startswith("2026-01-02"))
+
+        self.assertIn("-", row)
+        self.assertNotIn("0.00", row)
 
 
 if __name__ == "__main__":
