@@ -110,9 +110,16 @@ Added in week 3 (role C):
 * `generate_console_report(series: Series, period: Period = "day") -> str` — returns the summary table as text;
   it does not print (the CLI prints it). A `None` statistic is shown as `-`.
 
-Planned (week 3, role D):
-* `build_time_series_plot(...)` — PNG line plot "observed + forecast" (matplotlib, `Agg` backend).
-* A histogram of levels and one common plot style used by both plots.
+Plots (week 3; matplotlib is imported inside the functions, `pyplot` is not used):
+* `PLOT_STYLE: dict[str, Any]` and `styled_figure(title: str, xlabel: str, ylabel: str) -> tuple[Figure, Axes]`
+  — the common look of every plot (size, grid, colours, axis labels).
+* `build_time_series_plot(series: Series, output_path: str, forecast: list[tuple[datetime, float]] | None = None,
+  unit: str = "m") -> None` — PNG of the observed levels (gaps break the line) and, if given, the forecast points;
+  a series with no known values raises `ValueError`.
+* `build_level_histogram(series: Series, output_path: str, bins: int = 20, unit: str = "m") -> None`
+  — PNG histogram of the known levels; `bins` that is not a positive integer or a series without values raises `ValueError`.
+* `format_metrics_table(metrics: dict[str, float], unit: str = "m") -> str` — console table of forecast quality:
+  RMSE and MAE in `unit`, MAPE in percent, R2 without a unit, `NaN` shown as `-`.
 
 ---
 
@@ -135,16 +142,20 @@ Planned (week 3, role D):
 * `main() -> None` — `aquamonitor [--config FILE] <command>`, default `--config config.json`:
   * `fetch --site CODE [--period P7D] --out FILE` — downloads gauge height (`00065`) with `fetch_usgs_json`
     and saves the JSON text to `FILE`.
-  * `report --input FILE [--sensor ID] [--group-by day|week|month]` — reads a saved USGS JSON file,
-    runs `parse_usgs_json` and `clean_observations`, and prints `generate_console_report` (default `day`).
-  * `forecast --input FILE [--sensor ID] [--horizon HOURS]` — reads and cleans the file, fills gaps with
-    `linear_interpolate`, converts hours to steps with `hours_to_steps` and prints a naive forecast (default 12 hours).
+  * `report --input FILE [--sensor ID] [--group-by day|week|month] [--plot PNG]` — reads a saved USGS JSON file,
+    runs `parse_usgs_json` and `clean_observations`, and prints `generate_console_report` (default `day`);
+    `--plot` saves `build_level_histogram`.
+  * `forecast --input FILE [--sensor ID] [--horizon HOURS] [--plot PNG]` — reads and cleans the file, fills gaps with
+    `linear_interpolate`, converts hours to steps with `hours_to_steps` and prints a naive forecast (default 12 hours);
+    `--plot` saves `build_time_series_plot` with the forecast. When the series is longer than the horizon,
+    it also prints `format_metrics_table(evaluate_forecast(values, steps))` for the held-out last hours;
+    otherwise a note says there is not enough data.
   * `--sensor` is required only when the file holds several sensors.
   * The number of rejected records is printed to stderr as `[CLEAN] Rejected N records`; details go to the log.
 * Exit codes: `0` success; `1` — `HydroError`, `ValueError` or `OSError` (message `Error: ...` on stderr, no traceback)
   or no command given (help is printed); `2` — invalid arguments (argparse).
 * Installation: `pip install -e .` provides the `aquamonitor` command; `python -m aquamonitor` runs the same `main()`.
+* `run_tests.py` (repository root) runs all tests without installing the package; exit code 0 or 1.
 
 Planned (week 3, role E):
-* `forecast` prints RMSE/MAE of the naive forecast on the held-out last hours (needs `calculate_metrics`, role C).
 * `@retry(n)` for network errors in `fetch`, `@cached`; `level_range` for `LevelGauge` read from the configuration.
