@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aquamonitor.core import (
+    evaluate_forecast,
+    walk_forward,
     calculate_metrics,
     forecast_timestamps,
     hours_to_steps,
@@ -238,6 +240,47 @@ class TestMetrics(unittest.TestCase):
                 calculate_metrics(y_true, y_pred)
         with self.assertRaises(TypeError):
             calculate_metrics([1, None], [1, 2])  # type: ignore[list-item]
+
+
+class TestEvaluation(unittest.TestCase):
+
+    def test_evaluate_forecast_holds_out_the_last_points(self) -> None:
+        """The naive forecast repeats 3, the held-out facts are 4 and 5."""
+        result = evaluate_forecast([1, 2, 3, 4, 5], 2)
+
+        self.assertAlmostEqual(result["MAE"], 1.5)
+        self.assertAlmostEqual(result["RMSE"], math.sqrt(2.5))
+
+    def test_evaluate_forecast_rejects_bad_horizon(self) -> None:
+        for horizon in (0, -1, 5, 1.5, True):
+            with self.subTest(horizon), self.assertRaises(ValueError):
+                evaluate_forecast([1, 2, 3, 4, 5], horizon)  # type: ignore[arg-type]
+
+    def test_walk_forward_on_a_straight_line(self) -> None:
+        """On 0, 1, 2, ... the naive forecast for 1 step is always off by 1."""
+        result = walk_forward([float(i) for i in range(10)], horizon=1, min_train=3)
+
+        self.assertAlmostEqual(result["MAE"], 1.0)
+        self.assertAlmostEqual(result["RMSE"], 1.0)
+
+    def test_walk_forward_averages_several_windows(self) -> None:
+        """Two windows of 2 points are averaged into one result."""
+        result = walk_forward([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], horizon=2, min_train=2)
+
+        self.assertAlmostEqual(result["MAE"], 1.5)
+
+    def test_walk_forward_rejects_short_series(self) -> None:
+        with self.assertRaises(ValueError):
+            walk_forward([1.0, 2.0, 3.0], horizon=2, min_train=3)
+
+    def test_real_sample_metrics_use_the_cli_horizon(self) -> None:
+        observations = parse_usgs_json(SAMPLE.read_text(encoding="utf-8"))
+        values = linear_interpolate(Series(observations[0].sensor_id, observations))
+
+        result = evaluate_forecast(values, 12)
+
+        self.assertGreaterEqual(result["MAE"], 0.0)
+        self.assertGreaterEqual(result["RMSE"], result["MAE"])
 
 
 if __name__ == "__main__":

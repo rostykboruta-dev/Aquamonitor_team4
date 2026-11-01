@@ -332,3 +332,57 @@ def calculate_metrics(y_true: list[float], y_pred: list[float]) -> dict[str, flo
         "MAPE": _mean(ratios) * 100 if ratios else math.nan,
         "R2": 1 - sum(e * e for e in errors) / total if total else math.nan,
     }
+
+
+def evaluate_forecast(
+        values: list[float],
+        horizon: int,
+        forecaster: Callable[[list[float], int], list[float]] = naive_forecast,
+) -> dict[str, float]:
+    """Hold out the last `horizon` points, forecast them and return the metrics.
+
+    Args:
+        values: Series without gaps (fill them with linear_interpolate first).
+        horizon: Number of held-out points, in steps of the series.
+        forecaster: Model `(history, horizon) -> forecast`; naive by default.
+
+    Raises:
+        ValueError: If horizon is invalid or the series is not longer than it.
+    """
+    _check_horizon(horizon)
+    _validate(values, 1)
+    if len(values) <= horizon:
+        raise ValueError("series must be longer than the horizon.")
+    return calculate_metrics(values[-horizon:], forecaster(values[:-horizon], horizon))
+
+
+def walk_forward(
+        values: list[float],
+        horizon: int,
+        min_train: int,
+        forecaster: Callable[[list[float], int], list[float]] = naive_forecast,
+) -> dict[str, float]:
+    """Average the metrics over windows that grow by `horizon` points each time.
+
+    For each cut the model sees `values[:cut]` and forecasts the next `horizon`
+    points; windows where a metric is NaN are left out of its average.
+
+    Raises:
+        ValueError: If horizon or min_train is invalid or the series is too
+            short for one window.
+    """
+    _check_horizon(horizon)
+    _check_horizon(min_train)
+    _validate(values, 1)
+    cuts = range(min_train, len(values) - horizon + 1, horizon)
+    if not cuts:
+        raise ValueError("series is too short for walk-forward evaluation.")
+    runs = [
+        calculate_metrics(values[c:c + horizon], forecaster(values[:c], horizon))
+        for c in cuts
+    ]
+    result: dict[str, float] = {}
+    for name in runs[0]:
+        good = [run[name] for run in runs if not math.isnan(run[name])]
+        result[name] = _mean(good) if good else math.nan
+    return result
